@@ -1,88 +1,195 @@
 
 import os
+import uuid
 import secrets
+import hmac
+import json
+
+from datetime import datetime
 from functools import wraps
-from urllib.parse import urlparse
 
 from flask import (
-    Flask, jsonify, request, redirect,
-    url_for, session, render_template_string, flash
+    Flask,
+    request,
+    jsonify,
+    session,
+    redirect,
+    url_for,
+    render_template_string,
+    flash,
 )
 from flask_cors import CORS
-from dotenv import load_dotenv
-from werkzeug.security import check_password_hash
 from supabase import create_client
+from werkzeug.security import check_password_hash
+from werkzeug.utils import secure_filename
 
-load_dotenv()
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY")
 
-if not app.secret_key:
-    raise RuntimeError("SECRET_KEY environment variable missing hai.")
+app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-this-secret")
 
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").lower() == "true",
-    SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=1800,
+app.config["MAX_CONTENT_LENGTH"] = 90 * 1024 * 1024
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = (
+    os.getenv("COOKIE_SECURE", "false").lower() == "true"
+)
+
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+MAX_IMAGE_SIZE = 8 * 1024 * 1024
+MAX_GALLERY_IMAGES = 10
+STORAGE_BUCKET = "car-images"
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError(
+        "SUPABASE_URL aur SUPABASE_SERVICE_ROLE_KEY environment variables set karo."
+    )
+
+supabase = create_client(
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY
 )
 
 allowed_origins = [
-    origin.strip().rstrip("/")
+    origin.strip()
     for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ]
-CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
 
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-
-if not supabase_url or not supabase_key:
-    raise RuntimeError("Supabase environment variables missing hain.")
-
-supabase = create_client(supabase_url, supabase_key)
+if allowed_origins:
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": allowed_origins}}
+    )
 
 
-# ---------------- SECURITY HELPERS ----------------
+# =========================================================
+# SECURITY / CSRF
+# =========================================================
 
-def csrf_token():
+def get_csrf_token():
     if "csrf_token" not in session:
         session["csrf_token"] = secrets.token_urlsafe(32)
+
     return session["csrf_token"]
 
 
-app.jinja_env.globals["csrf_token"] = csrf_token
+@app.context_processor
+def inject_template_helpers():
+    return {"csrf_token": get_csrf_token}
 
 
 def valid_csrf():
-    supplied = request.form.get("csrf_token", "")
-    expected = session.get("csrf_token", "")
-    return bool(expected and supplied and secrets.compare_digest(supplied, expected))
+    submitted = request.form.get("csrf_token", "")
+    saved = session.get("csrf_token", "")
+
+    return bool(
+        submitted
+        and saved
+        and hmac.compare_digest(submitted, saved)
+    )
 
 
-def admin_required(view):
-    @wraps(view)
+def admin_required(view_function):
+    @wraps(view_function)
     def wrapped(*args, **kwargs):
         if not session.get("admin_logged_in"):
             return redirect(url_for("admin_login"))
-        return view(*args, **kwargs)
+
+        return view_function(*args, **kwargs)
+
     return wrapped
 
 
-# ---------------- PUBLIC API ----------------
+# =========================================================
+# IMAGE UPLOAD
+# =========================================================
+
+def upload_car_image(file):
+    """
+    Supabase Storage mein image upload karke public URL return karta hai.
+    """
+
+    if not file or not file.filename:
+        raise ValueError("Image select karo.")
+
+    original_name = secure_filename(file.filename)
+
+    if "." not in original_name:
+        raise ValueError("Image file ka extension missing hai.")
+
+    extension = original_name.rsplit(".", 1)[-1].lower()
+
+    if extension not in ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError(
+            "Sirf JPG, JPEG, PNG aur WEBP images allowed hain."
+        )
+
+    file_bytes = file.read()
+
+    if not file_bytes:
+        raise ValueError("Uploaded image empty hai.")
+
+    if len(file_bytes) > MAX_IMAGE_SIZE:
+        raise ValueError("Har image 8 MB se chhoti honi chahiye.")
+
+    content_types = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+    }
+
+    storage_path = f"cars/{uuid.uuid4().hex}.{extension}"
+
+    supabase.storage.from_(STORAGE_BUCKET).upload(
+        storage_path,
+        file_bytes,
+        {
+            "content-type": content_types[extension],
+            "upsert": "false",
+        },
+    )
+
+    public_url = supabase.storage.from_(
+        STORAGE_BUCKET
+    ).get_public_url(storage_path)
+
+    # Supabase SDK versions may return a URL string or a dictionary.
+    if isinstance(public_url, dict):
+        public_url = (
+            public_url.get("publicUrl")
+            or public_url.get("publicURL")
+            or public_url.get("url")
+        )
+
+    if not public_url:
+        raise RuntimeError("Uploaded image ka public URL nahi mila.")
+
+    return public_url
+
+
+# =========================================================
+# PUBLIC API - AVAILABLE CARS
+# =========================================================
 
 @app.route("/")
 def home():
-    return jsonify({"message": "Car website API is running"})
+    return jsonify({
+        "message": "Car Rental API is running",
+        "cars_endpoint": "/api/cars",
+        "admin_login": "/admin/login",
+    })
 
 
-@app.route("/api/health")
-def health():
-    return jsonify({"status": "ok"})
-
-
-@app.route("/api/cars")
+@app.route("/api/cars", methods=["GET"])
 def get_cars():
     try:
         result = (
@@ -92,50 +199,105 @@ def get_cars():
             .order("created_at", desc=True)
             .execute()
         )
-        return jsonify({"cars": result.data or []})
-    except Exception:
-        app.logger.exception("Cars fetch failed")
-        return jsonify({"error": "Unable to load cars"}), 500
+
+        cars = result.data or []
+
+        # Keep image_url for compatibility with an existing frontend.
+        for car in cars:
+            if not car.get("main_image"):
+                car["main_image"] = car.get("image_url")
+
+            if not car.get("gallery_images"):
+                car["gallery_images"] = []
+
+            if not car.get("features"):
+                car["features"] = []
+
+        return jsonify({"cars": cars}), 200
+
+    except Exception as error:
+        app.logger.exception("Could not fetch cars")
+        return jsonify({
+            "error": "Cars fetch nahi ho paayi."
+        }), 500
 
 
-# ---------------- LOGIN PAGE ----------------
+# =========================================================
+# ADMIN LOGIN
+# =========================================================
 
 LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Admin Login | Vishal Car Rental</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;
-padding:20px;background:#0f172a;color:#f8fafc;font-family:Arial}
-.card{width:100%;max-width:390px;background:#1e293b;padding:30px;
-border-radius:16px}
-input,button{width:100%;padding:13px;margin-top:12px;border-radius:8px;
-font-size:16px}
-input{background:#0f172a;color:white;border:1px solid #475569}
-button{background:#22c55e;border:0;font-weight:bold;cursor:pointer}
-.error{color:#fca5a5}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Admin Login | Kota Carz</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+        }
+        .card {
+            width: 100%;
+            max-width: 400px;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px #00000012;
+        }
+        h1 { margin-top: 0; font-size: 25px; }
+        label { display: block; margin: 16px 0 7px; }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 7px;
+        }
+        button {
+            width: 100%;
+            margin-top: 20px;
+            padding: 13px;
+            background: #111827;
+            color: white;
+            border: 0;
+            border-radius: 7px;
+            cursor: pointer;
+        }
+        .message { padding: 10px; background: #fee2e2; border-radius: 6px; }
+    </style>
 </head>
 <body>
-<div class="card">
-<h1>Admin Login</h1>
-<p>Vishal Car Rental & Tour and Travels</p>
-{% for message in get_flashed_messages() %}
-<p class="error">{{ message }}</p>
-{% endfor %}
-<form method="post">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<input name="username" placeholder="Username" required
-autocomplete="username">
-<input type="password" name="password" placeholder="Password"
-required autocomplete="current-password">
-<button type="submit">Login</button>
-</form>
-</div>
+    <div class="card">
+        <h1>Kota Carz Admin</h1>
+        <p>Login to manage your cars.</p>
+
+        {% with messages = get_flashed_messages() %}
+            {% for message in messages %}
+                <p class="message">{{ message }}</p>
+            {% endfor %}
+        {% endwith %}
+
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <label>Username</label>
+            <input type="text" name="username" required
+                   autocomplete="username">
+
+            <label>Password</label>
+            <input type="password" name="password" required
+                   autocomplete="current-password">
+
+            <button type="submit">Login</button>
+        </form>
+    </div>
 </body>
 </html>
 """
@@ -148,7 +310,7 @@ def admin_login():
 
     if request.method == "POST":
         if not valid_csrf():
-            flash("Page expire ho gaya. Dobara try karo.")
+            flash("Session expire hua hai. Dobara try karo.")
             return redirect(url_for("admin_login"))
 
         username = request.form.get("username", "").strip()
@@ -157,7 +319,7 @@ def admin_login():
         try:
             result = (
                 supabase.table("admin")
-                .select("id, username, password_hash")
+                .select("username, password_hash")
                 .eq("username", username)
                 .limit(1)
                 .execute()
@@ -165,193 +327,387 @@ def admin_login():
 
             admins = result.data or []
 
-            if admins:
+            if admins and check_password_hash(
+                admins[0]["password_hash"],
+                password
+            ):
                 session.clear()
                 session["admin_logged_in"] = True
-                session["admin_id"] = admins[0]["id"]
-                session.permanent = True
-                csrf_token()
+                session["admin_username"] = admins[0]["username"]
+                session["csrf_token"] = secrets.token_urlsafe(32)
+
                 return redirect(url_for("admin_dashboard"))
 
             flash("Username ya password galat hai.")
 
         except Exception:
             app.logger.exception("Admin login failed")
-            flash("Login abhi nahi ho paya. Server logs check karo.")
+            flash("Login abhi nahi ho paaya. Configuration check karo.")
 
     return render_template_string(LOGIN_HTML)
 
 
-@app.route("/admin/logout", methods=["POST"])
-@admin_required
-def admin_logout():
-    if not valid_csrf():
-        return "Invalid CSRF token", 400
-
-    session.clear()
-    return redirect(url_for("admin_login"))
-
-
-# ---------------- ADMIN DASHBOARD ----------------
+# =========================================================
+# ADMIN DASHBOARD
+# =========================================================
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Car Admin Dashboard</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#f1f5f9;color:#0f172a;font-family:Arial}
-header{background:#0f172a;color:white;padding:18px 5%;
-display:flex;justify-content:space-between;align-items:center;gap:12px}
-header h2{margin:0;font-size:20px}
-main{max-width:1200px;margin:25px auto;padding:0 16px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
-.stat,.panel{background:white;border-radius:12px;padding:20px;
-box-shadow:0 3px 15px #0f172a0c}
-.stat strong{display:block;font-size:27px;margin-top:8px}
-.layout{display:grid;grid-template-columns:minmax(260px,350px) minmax(0,1fr);
-gap:20px;margin-top:22px;align-items:start}
-input,select,textarea,button{width:100%;padding:11px;margin-top:7px;
-margin-bottom:12px;border:1px solid #cbd5e1;border-radius:7px;font:inherit}
-label{font-size:14px;font-weight:bold}
-textarea{min-height:85px;resize:vertical}
-button{background:#16a34a;color:white;border:0;font-weight:bold;cursor:pointer}
-.logout{background:#dc2626;width:auto;margin:0}
-.delete{background:#dc2626;width:auto;margin:0}
-.notice{background:#dcfce7;color:#166534;padding:12px;
-border-radius:8px;margin-bottom:15px}
-.error{background:#fee2e2;color:#991b1b}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;min-width:590px}
-th,td{text-align:left;padding:12px;border-bottom:1px solid #e2e8f0}
-th{background:#f8fafc}
-.car-image{width:75px;height:50px;object-fit:cover;border-radius:5px}
-.status{font-size:12px;padding:5px 7px;border-radius:5px;
-background:#dcfce7;color:#166534}
-.off{background:#fee2e2;color:#991b1b}
-@media(max-width:800px){.layout{grid-template-columns:1fr}}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Car Management | Kota Carz</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f8fafc;
+            color: #111827;
+        }
+        .container { max-width: 1200px; margin: auto; }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 24px;
+        }
+        .panel {
+            background: white;
+            padding: 22px;
+            margin-bottom: 24px;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 15px;
+        }
+        .field { min-width: 0; }
+        .full { grid-column: 1 / -1; }
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 7px;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font: inherit;
+        }
+        textarea { min-height: 90px; resize: vertical; }
+        input[type="checkbox"] { width: auto; }
+        input[type="file"] { background: #f8fafc; }
+        button, .button {
+            display: inline-block;
+            padding: 11px 15px;
+            background: #111827;
+            color: white;
+            border: 0;
+            border-radius: 6px;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .danger { background: #dc2626; }
+        .success { background: #dcfce7; padding: 12px; }
+        .error { background: #fee2e2; padding: 12px; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; min-width: 650px; }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+            vertical-align: top;
+        }
+        .car-image {
+            width: 90px;
+            height: 65px;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+        .muted { color: #64748b; font-size: 13px; }
+        @media (max-width: 650px) {
+            body { padding: 12px; }
+            .form-grid { grid-template-columns: 1fr; }
+            .full { grid-column: auto; }
+            .panel { padding: 15px; }
+        }
+    </style>
 </head>
 <body>
-<header>
-<h2>Vishal Car Rental — Admin</h2>
-<form method="post" action="{{ url_for('admin_logout') }}">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<button class="logout" type="submit">Logout</button>
-</form>
-</header>
-<main>
-{% for message in get_flashed_messages() %}
-<div class="notice">{{ message }}</div>
-{% endfor %}
+<div class="container">
+    <header>
+        <div>
+            <h1>Car Management</h1>
+            <p class="muted">
+                Logged in as {{ session.get("admin_username", "Admin") }}
+            </p>
+        </div>
+        <form method="POST" action="{{ url_for('admin_logout') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Logout</button>
+        </form>
+    </header>
 
-<div class="stats">
-<div class="stat">Total Cars<strong>{{ cars|length }}</strong></div>
-<div class="stat">Available<strong>{{ available }}</strong></div>
-<div class="stat">Unavailable<strong>{{ cars|length - available }}</strong></div>
+    {% with messages = get_flashed_messages() %}
+        {% for message in messages %}
+            <p class="success">{{ message }}</p>
+        {% endfor %}
+    {% endwith %}
+
+    <section class="panel">
+        <h2>Add New Car</h2>
+        <p class="muted">
+            Main image required hai. Gallery mein maximum 10 images select kar sakte ho.
+            Har image 8 MB se chhoti honi chahiye.
+        </p>
+
+        <form method="POST"
+              action="{{ url_for('admin_add_car') }}"
+              enctype="multipart/form-data">
+
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="form-grid">
+
+                <div class="field">
+                    <label>Car Name *</label>
+                    <input name="name" required placeholder="Maruti Suzuki Baleno">
+                </div>
+
+                <div class="field">
+                    <label>Brand *</label>
+                    <input name="brand" required placeholder="Maruti Suzuki">
+                </div>
+
+                <div class="field">
+                    <label>Category</label>
+                    <input name="category" placeholder="Hatchback">
+                </div>
+
+                <div class="field">
+                    <label>Rental Price Per Day (₹) *</label>
+                    <input name="price" type="number" min="0" step="0.01" required>
+                </div>
+
+                <div class="field">
+                    <label>Ex-showroom Price</label>
+                    <input name="ex_showroom_price" placeholder="₹6.66 - 9.88 Lakh">
+                </div>
+
+                <div class="field">
+                    <label>Year *</label>
+                    <input name="year" type="number" min="1900" max="2100" required>
+                </div>
+
+                <div class="field">
+                    <label>Fuel</label>
+                    <select name="fuel">
+                        <option value="">Select fuel</option>
+                        <option>Petrol</option>
+                        <option>Diesel</option>
+                        <option>CNG</option>
+                        <option>Electric</option>
+                        <option>Hybrid</option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label>Transmission</label>
+                    <select name="transmission">
+                        <option value="">Select transmission</option>
+                        <option>Manual</option>
+                        <option>Automatic</option>
+                        <option>AMT</option>
+                        <option>CVT</option>
+                        <option>DCT</option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label>Gearbox</label>
+                    <input name="gearbox" placeholder="5-Speed Manual">
+                </div>
+
+                <div class="field">
+                    <label>Seats</label>
+                    <input name="seats" placeholder="5">
+                </div>
+
+                <div class="field">
+                    <label>KM Included Per Day</label>
+                    <input name="km_included" placeholder="300 km/day">
+                </div>
+
+                <div class="field">
+                    <label>Mileage</label>
+                    <input name="mileage" placeholder="22.35 Kmpl">
+                </div>
+
+                <div class="field">
+                    <label>Engine</label>
+                    <input name="engine" placeholder="1197 cc, 4 Cylinder">
+                </div>
+
+                <div class="field">
+                    <label>Max Power</label>
+                    <input name="max_power" placeholder="88.50 bhp @ 6000 rpm">
+                </div>
+
+                <div class="field">
+                    <label>Max Torque</label>
+                    <input name="max_torque" placeholder="113 Nm @ 4400 rpm">
+                </div>
+
+                <div class="field">
+                    <label>Fuel Tank</label>
+                    <input name="fuel_tank" placeholder="37 L">
+                </div>
+
+                <div class="field">
+                    <label>Boot Space</label>
+                    <input name="boot_space" placeholder="318 L">
+                </div>
+
+                <div class="field">
+                    <label>Ground Clearance</label>
+                    <input name="ground_clearance" placeholder="170 mm">
+                </div>
+
+                <div class="field">
+                    <label>Dimensions</label>
+                    <input name="dimensions" placeholder="3990 x 1745 x 1500 mm">
+                </div>
+
+                <div class="field">
+                    <label>Wheelbase</label>
+                    <input name="wheelbase" placeholder="2520 mm">
+                </div>
+
+                <div class="field">
+                    <label>Competitors</label>
+                    <input name="competitors" placeholder="Hyundai i20, Tata Altroz">
+                </div>
+
+                <div class="field">
+                    <label>Guarantee / Rental Terms</label>
+                    <input name="guarantee" placeholder="Kota Carz rental guarantee">
+                </div>
+
+                <div class="field full">
+                    <label>Car Description</label>
+                    <textarea name="description"
+                              placeholder="Car ki details likho..."></textarea>
+                </div>
+
+                <div class="field full">
+                    <label>Features (har feature alag line mein)</label>
+                    <textarea name="features"
+                              placeholder="ABS&#10;Airbags&#10;Power Steering"></textarea>
+                </div>
+
+                <div class="field full">
+                    <label>Main Car Image *</label>
+                    <input type="file" name="main_image"
+                           accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                           required>
+                </div>
+
+                <div class="field full">
+                    <label>Gallery Images (multiple select kar sakte ho)</label>
+                    <input type="file" name="gallery_images" multiple
+                           accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+                </div>
+
+                <div class="field full">
+                    <label>
+                        <input type="checkbox" name="is_available" value="true" checked>
+                        Car available for rent
+                    </label>
+                </div>
+
+                <div class="field full">
+                    <button type="submit">Upload Images & Add Car</button>
+                </div>
+
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h2>All Cars ({{ cars|length }})</h2>
+
+        {% if cars %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Image</th>
+                        <th>Car</th>
+                        <th>Price/Day</th>
+                        <th>Status</th>
+                        <th>Gallery</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for car in cars %}
+                    <tr>
+                        <td>
+                            {% set img = car.get("main_image") or car.get("image_url") %}
+                            {% if img %}
+                                <img class="car-image" src="{{ img }}" alt="Car image">
+                            {% else %}
+                                No image
+                            {% endif %}
+                        </td>
+                        <td>
+                            <strong>{{ car.get("name", "Unnamed car") }}</strong><br>
+                            <span class="muted">
+                                {{ car.get("brand", "") }} · {{ car.get("year", "") }}
+                            </span>
+                        </td>
+                        <td>₹{{ car.get("price", "") }}</td>
+                        <td>
+                            {{ "Available" if car.get("is_available") else "Unavailable" }}
+                        </td>
+                        <td>
+                            {% set gallery = car.get("gallery_images") or [] %}
+                            {{ gallery|length if gallery is iterable and gallery is not string else 0 }}
+                        </td>
+                        <td>
+                            <form method="POST"
+                                  action="{{ url_for('admin_delete_car', car_id=car.get('id')) }}"
+                                  onsubmit="return confirm('Kya aap ye car record delete karna chahte ho?')">
+                                <input type="hidden" name="csrf_token"
+                                       value="{{ csrf_token() }}">
+                                <button class="danger" type="submit">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+            <p>Abhi koi car add nahi hui hai.</p>
+        {% endif %}
+    </section>
 </div>
-
-<div class="layout">
-<section class="panel">
-<h2>Add New Car</h2>
-<form method="post" action="{{ url_for('admin_add_car') }}">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-<label>Car Name *</label>
-<input name="name" placeholder="Swift VXI" required maxlength="100">
-
-<label>Brand *</label>
-<input name="brand" placeholder="Maruti Suzuki" required maxlength="100">
-
-<label>Price per day (₹) *</label>
-<input type="number" name="price" min="0" step="0.01" required>
-
-<label>Year *</label>
-<input type="number" name="year" min="1900" max="2100" required>
-
-<label>Fuel *</label>
-<select name="fuel" required>
-<option value="">Select fuel</option>
-<option>Petrol</option><option>Diesel</option>
-<option>CNG</option><option>Electric</option><option>Hybrid</option>
-</select>
-
-<label>Transmission *</label>
-<select name="transmission" required>
-<option value="">Select transmission</option>
-<option>Manual</option><option>Automatic</option>
-</select>
-
-<label>Image URL</label>
-<input type="url" name="image_url" placeholder="https://example.com/car.jpg">
-
-<label>Description</label>
-<textarea name="description" maxlength="2000"
-placeholder="Car details and features"></textarea>
-
-<label>
-<input type="checkbox" name="is_available" value="true"
-checked style="width:auto;margin:0 5px 12px 0">
-Available for booking
-</label>
-<button type="submit">+ Add Car</button>
-</form>
-</section>
-
-<section class="panel">
-<h2>Car List</h2>
-<div class="table-wrap">
-<table>
-<thead><tr><th>Image</th><th>Car Details</th>
-<th>Price/day</th><th>Status</th><th>Action</th></tr></thead>
-<tbody>
-{% for car in cars %}
-<tr>
-<td>
-{% if car.get('image_url') %}
-<img class="car-image" src="{{ car.get('image_url') }}"
-alt="{{ car.get('name', 'Car') }}" loading="lazy">
-{% else %}No image{% endif %}
-</td>
-<td><strong>{{ car.get('name', 'Unnamed') }}</strong><br>
-{{ car.get('brand', '') }} · {{ car.get('year', '') }}<br>
-<small>{{ car.get('fuel', '') }} · {{ car.get('transmission', '') }}</small>
-</td>
-<td>₹{{ car.get('price', 0) }}</td>
-<td>
-{% if car.get('is_available') %}
-<span class="status">Available</span>
-{% else %}
-<span class="status off">Unavailable</span>
-{% endif %}
-</td>
-<td>
-<form method="post"
-action="{{ url_for('admin_delete_car', car_id=car.get('id')) }}"
-onsubmit="return confirm('Kya is car ko permanently delete karna hai?')">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<button class="delete" type="submit">Delete</button>
-</form>
-</td>
-</tr>
-{% else %}
-<tr><td colspan="5">Abhi koi car add nahi hai.</td></tr>
-{% endfor %}
-</tbody>
-</table>
-</div>
-</section>
-</div>
-</main>
 </body>
 </html>
 """
 
 
-@app.route("/admin")
+@app.route("/admin", methods=["GET"])
 @admin_required
 def admin_dashboard():
     try:
@@ -363,110 +719,215 @@ def admin_dashboard():
         )
 
         cars = result.data or []
-        available = sum(
-            1 for car in cars if car.get("is_available") is True
-        )
 
         return render_template_string(
             DASHBOARD_HTML,
-            cars=cars,
-            available=available,
+            cars=cars
         )
 
     except Exception:
         app.logger.exception("Dashboard load failed")
-        return "Dashboard load nahi hua. Server logs check karo.", 500
+        return "Dashboard load nahi ho paaya. Server logs check karo.", 500
 
 
-# ---------------- ADD CAR ----------------
+# =========================================================
+# ADD CAR + MAIN IMAGE + GALLERY
+# =========================================================
 
 @app.route("/admin/cars/add", methods=["POST"])
 @admin_required
 def admin_add_car():
     if not valid_csrf():
-        return "Invalid CSRF token. Dashboard reload karo.", 400
-
-    name = request.form.get("name", "").strip()
-    brand = request.form.get("brand", "").strip()
-    fuel = request.form.get("fuel", "").strip()
-    transmission = request.form.get("transmission", "").strip()
-    image_url = request.form.get("image_url", "").strip()
-    description = request.form.get("description", "").strip()
-
-    if not name or not brand or not fuel or not transmission:
-        flash("Saare required fields fill karo.")
+        flash("Invalid form session. Dobara submit karo.")
         return redirect(url_for("admin_dashboard"))
 
-    if len(name) > 100 or len(brand) > 100 or len(description) > 2000:
-        flash("Name, brand ya description bahut lamba hai.")
-        return redirect(url_for("admin_dashboard"))
-
-    if image_url:
-        parsed_url = urlparse(image_url)
-        if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
-            flash("Valid HTTP/HTTPS image URL enter karo.")
-            return redirect(url_for("admin_dashboard"))
+    uploaded_urls = []
 
     try:
-        price = float(request.form.get("price", ""))
-        year = int(request.form.get("year", ""))
-    except (ValueError, TypeError):
-        flash("Price aur year valid enter karo.")
-        return redirect(url_for("admin_dashboard"))
+        name = request.form.get("name", "").strip()
+        brand = request.form.get("brand", "").strip()
+        price_text = request.form.get("price", "").strip()
+        year_text = request.form.get("year", "").strip()
 
-    if price < 0 or not 1900 <= year <= 2100:
-        flash("Price ya year valid nahi hai.")
-        return redirect(url_for("admin_dashboard"))
+        if not name or not brand or not price_text or not year_text:
+            raise ValueError("Name, brand, price aur year required hain.")
 
-    car_data = {
-        "name": name,
-        "brand": brand,
-        "price": price,
-        "year": year,
-        "fuel": fuel,
-        "transmission": transmission,
-        "image_url": image_url or None,
-        "description": description or None,
-        "is_available": request.form.get("is_available") == "true",
-    }
+        try:
+            price = float(price_text)
+            year = int(year_text)
+        except ValueError:
+            raise ValueError("Price aur year valid numbers hone chahiye.")
 
-    try:
+        if price < 0:
+            raise ValueError("Price negative nahi ho sakti.")
+
+        if year < 1900 or year > 2100:
+            raise ValueError("Year valid range mein enter karo.")
+
+        main_file = request.files.get("main_image")
+
+        if not main_file or not main_file.filename:
+            raise ValueError("Main car image select karna required hai.")
+
+        gallery_files = [
+            file for file in request.files.getlist("gallery_images")
+            if file and file.filename
+        ]
+
+        if len(gallery_files) > MAX_GALLERY_IMAGES:
+            raise ValueError(
+                f"Maximum {MAX_GALLERY_IMAGES} gallery images allowed hain."
+            )
+
+        # Upload the main image first.
+        main_image_url = upload_car_image(main_file)
+        uploaded_urls.append(main_image_url)
+
+        # Upload gallery images.
+        gallery_urls = []
+
+        for gallery_file in gallery_files:
+            image_url = upload_car_image(gallery_file)
+            uploaded_urls.append(image_url)
+            gallery_urls.append(image_url)
+
+        # Features are stored as a JSONB array.
+        features_text = request.form.get("features", "")
+        features = [
+            line.strip()
+            for line in features_text.splitlines()
+            if line.strip()
+        ]
+
+        car_data = {
+            "name": name,
+            "brand": brand,
+            "price": price,
+            "year": year,
+            "fuel": request.form.get("fuel", "").strip(),
+            "transmission": request.form.get("transmission", "").strip(),
+            "description": request.form.get("description", "").strip(),
+            "is_available": request.form.get("is_available") == "true",
+
+            # Main image also goes into image_url for old frontend compatibility.
+            "image_url": main_image_url,
+            "main_image": main_image_url,
+            "gallery_images": gallery_urls,
+
+            "category": request.form.get("category", "").strip(),
+            "ex_showroom_price": request.form.get("ex_showroom_price", "").strip(),
+            "km_included": request.form.get("km_included", "").strip(),
+            "seats": request.form.get("seats", "").strip(),
+            "mileage": request.form.get("mileage", "").strip(),
+            "gearbox": request.form.get("gearbox", "").strip(),
+            "engine": request.form.get("engine", "").strip(),
+            "max_power": request.form.get("max_power", "").strip(),
+            "max_torque": request.form.get("max_torque", "").strip(),
+            "fuel_tank": request.form.get("fuel_tank", "").strip(),
+            "boot_space": request.form.get("boot_space", "").strip(),
+            "ground_clearance": request.form.get("ground_clearance", "").strip(),
+            "dimensions": request.form.get("dimensions", "").strip(),
+            "wheelbase": request.form.get("wheelbase", "").strip(),
+            "features": features,
+            "competitors": request.form.get("competitors", "").strip(),
+            "guarantee": request.form.get("guarantee", "").strip(),
+        }
+
         supabase.table("cars").insert(car_data).execute()
-        flash("Car successfully add ho gayi!")
+
+        flash("Car aur images successfully add ho gayi!")
+        return redirect(url_for("admin_dashboard"))
+
+    except ValueError as error:
+        flash(str(error))
+        return redirect(url_for("admin_dashboard"))
+
     except Exception:
-        app.logger.exception("Car insert failed")
-        flash("Car add nahi hui. Database columns aur logs check karo.")
+        app.logger.exception("Add car failed")
 
-    return redirect(url_for("admin_dashboard"))
+        # Storage uploads may remain if the database insert fails.
+        flash(
+            "Car add nahi ho paayi. Supabase columns, Storage permissions "
+            "aur server logs check karo."
+        )
+        return redirect(url_for("admin_dashboard"))
 
 
-# ---------------- DELETE CAR ----------------
+# =========================================================
+# DELETE CAR RECORD
+# =========================================================
 
-@app.route("/admin/cars/<car_id>/delete", methods=["POST"])
+@app.route("/admin/cars/<int:car_id>/delete", methods=["POST"])
 @admin_required
 def admin_delete_car(car_id):
     if not valid_csrf():
-        return "Invalid CSRF token. Dashboard reload karo.", 400
+        flash("Invalid form session. Dobara try karo.")
+        return redirect(url_for("admin_dashboard"))
 
     try:
-        result = (
+        (
             supabase.table("cars")
             .delete()
             .eq("id", car_id)
             .execute()
         )
 
-        if result.data:
-            flash("Car successfully delete ho gayi.")
-        else:
-            flash("Car nahi mili ya delete nahi hui.")
+        flash(
+            "Car database se delete ho gayi. "
+            "Storage mein uski images automatically delete nahi hui hain."
+        )
 
     except Exception:
-        app.logger.exception("Car deletion failed")
-        flash("Delete fail hua. Database ID aur logs check karo.")
+        app.logger.exception("Delete car failed")
+        flash("Car delete nahi ho paayi.")
 
     return redirect(url_for("admin_dashboard"))
 
 
+# =========================================================
+# ADMIN LOGOUT
+# =========================================================
+
+@app.route("/admin/logout", methods=["POST"])
+@admin_required
+def admin_logout():
+    if not valid_csrf():
+        flash("Invalid form session.")
+        return redirect(url_for("admin_dashboard"))
+
+    session.clear()
+    return redirect(url_for("admin_login"))
+
+
+# =========================================================
+# ERROR HANDLERS
+# =========================================================
+
+@app.errorhandler(413)
+def file_too_large(error):
+    return (
+        "Upload size limit exceed ho gayi. Total upload 90 MB se kam rakho.",
+        413,
+    )
+
+
+@app.errorhandler(404)
+def page_not_found(error):
+    return jsonify({"error": "Page not found"}), 404
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({"error": "Internal server error"}), 500
+
+
+# =========================================================
+# LOCAL DEVELOPMENT
+# =========================================================
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=False,
+    )

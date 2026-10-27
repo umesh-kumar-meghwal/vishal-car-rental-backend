@@ -688,6 +688,11 @@ DASHBOARD_HTML = """
                                        value="{{ csrf_token() }}">
                                 <button class="danger" type="submit">Delete</button>
                             </form>
+                            <form method="GET"
+                                action="{{ url_for('admin_edit_car', car_id=car.get('id')) }}"
+                                style="display:inline-block; margin-bottom:6px;">
+                                <button type="submit">Edit</button>
+                            </form>
                         </td>
                     </tr>
                 {% endfor %}
@@ -916,6 +921,436 @@ def page_not_found(error):
 @app.errorhandler(500)
 def internal_server_error(error):
     return jsonify({"error": "Internal server error"}), 500
+
+# =========================================================
+# EDIT CAR
+# =========================================================
+
+EDIT_CAR_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Car | Kota Carz</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f8fafc;
+            color: #111827;
+        }
+        .container { max-width: 1000px; margin: auto; }
+        .panel {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 22px;
+            margin-bottom: 20px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 15px;
+        }
+        .field { min-width: 0; }
+        .full { grid-column: 1 / -1; }
+        label {
+            display: block;
+            margin-bottom: 7px;
+            font-weight: bold;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font: inherit;
+        }
+        input[type="checkbox"] { width: auto; }
+        input[type="file"] { background: #f8fafc; }
+        textarea { min-height: 90px; }
+        button, .btn {
+            display: inline-block;
+            padding: 11px 15px;
+            border: 0;
+            border-radius: 6px;
+            background: #111827;
+            color: white;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .image {
+            width: 150px;
+            height: 105px;
+            object-fit: cover;
+            border-radius: 7px;
+        }
+        .muted { color: #64748b; font-size: 13px; }
+        .message { background: #fee2e2; padding: 10px; }
+        @media (max-width: 600px) {
+            .grid { grid-template-columns: 1fr; }
+            .full { grid-column: auto; }
+            body { padding: 10px; }
+            .panel { padding: 14px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <p><a class="btn" href="{{ url_for('admin_dashboard') }}">Back to Dashboard</a></p>
+
+    <section class="panel">
+        <h1>Edit Car: {{ car.get('name', '') }}</h1>
+
+        {% with messages = get_flashed_messages() %}
+            {% for message in messages %}
+                <p class="message">{{ message }}</p>
+            {% endfor %}
+        {% endwith %}
+
+        <form method="POST"
+              enctype="multipart/form-data"
+              action="{{ url_for('admin_edit_car', car_id=car.get('id')) }}">
+
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="grid">
+                <div class="field">
+                    <label>Car Name *</label>
+                    <input name="name" value="{{ car.get('name') or '' }}" required>
+                </div>
+
+                <div class="field">
+                    <label>Brand *</label>
+                    <input name="brand" value="{{ car.get('brand') or '' }}" required>
+                </div>
+
+                <div class="field">
+                    <label>Category</label>
+                    <input name="category" value="{{ car.get('category') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Rental Price Per Day (₹) *</label>
+                    <input type="number" name="price" min="0" step="0.01"
+                           value="{{ car.get('price', '') }}" required>
+                </div>
+
+                <div class="field">
+                    <label>Ex-showroom Price</label>
+                    <input name="ex_showroom_price"
+                           value="{{ car.get('ex_showroom_price') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Year *</label>
+                    <input type="number" name="year" min="1900" max="2100"
+                           value="{{ car.get('year', '') }}" required>
+                </div>
+
+                <div class="field">
+                    <label>Fuel</label>
+                    <select name="fuel">
+                        {% for option in ['Petrol', 'Diesel', 'CNG', 'Electric', 'Hybrid'] %}
+                            <option value="{{ option }}"
+                                {% if car.get('fuel') == option %}selected{% endif %}>
+                                {{ option }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label>Transmission</label>
+                    <select name="transmission">
+                        {% for option in ['Manual', 'Automatic', 'AMT', 'CVT', 'DCT'] %}
+                            <option value="{{ option }}"
+                                {% if car.get('transmission') == option %}selected{% endif %}>
+                                {{ option }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label>Gearbox</label>
+                    <input name="gearbox" value="{{ car.get('gearbox') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Seats</label>
+                    <input name="seats" value="{{ car.get('seats') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>KM Included Per Day</label>
+                    <input name="km_included" value="{{ car.get('km_included') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Mileage</label>
+                    <input name="mileage" value="{{ car.get('mileage') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Engine</label>
+                    <input name="engine" value="{{ car.get('engine') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Max Power</label>
+                    <input name="max_power" value="{{ car.get('max_power') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Max Torque</label>
+                    <input name="max_torque" value="{{ car.get('max_torque') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Fuel Tank</label>
+                    <input name="fuel_tank" value="{{ car.get('fuel_tank') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Boot Space</label>
+                    <input name="boot_space" value="{{ car.get('boot_space') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Ground Clearance</label>
+                    <input name="ground_clearance"
+                           value="{{ car.get('ground_clearance') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Dimensions</label>
+                    <input name="dimensions" value="{{ car.get('dimensions') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Wheelbase</label>
+                    <input name="wheelbase" value="{{ car.get('wheelbase') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Competitors</label>
+                    <input name="competitors" value="{{ car.get('competitors') or '' }}">
+                </div>
+
+                <div class="field">
+                    <label>Guarantee / Rental Terms</label>
+                    <input name="guarantee" value="{{ car.get('guarantee') or '' }}">
+                </div>
+
+                <div class="field full">
+                    <label>Description</label>
+                    <textarea name="description">{{ car.get('description') or '' }}</textarea>
+                </div>
+
+                <div class="field full">
+                    <label>Features (har line par ek feature)</label>
+                    <textarea name="features">{% for feature in car.get('features') or [] %}{{ feature }}
+{% endfor %}</textarea>
+                </div>
+
+                <div class="field full">
+                    <label>Current Main Image</label>
+                    {% set main_img = car.get('main_image') or car.get('image_url') %}
+                    {% if main_img %}
+                        <p><img class="image" src="{{ main_img }}" alt="Current main image"></p>
+                    {% else %}
+                        <p class="muted">No main image uploaded.</p>
+                    {% endif %}
+                    <label>Upload a new main image (optional)</label>
+                    <input type="file" name="main_image"
+                           accept=".jpg,.jpeg,.png,.webp">
+                    <p class="muted">Koi nayi image select nahi karoge to current image rahegi.</p>
+                </div>
+
+                <div class="field full">
+                    <label>Current Gallery Images</label>
+                    {% for image_url in car.get('gallery_images') or [] %}
+                        <img class="image" src="{{ image_url }}" alt="Gallery image">
+                    {% else %}
+                        <p class="muted">No gallery images uploaded.</p>
+                    {% endfor %}
+
+                    <label>Upload gallery images (optional)</label>
+                    <input type="file" name="gallery_images" multiple
+                           accept=".jpg,.jpeg,.png,.webp">
+                    <p class="muted">
+                        Nayi gallery files select karne par gallery replace hogi.
+                        Purani gallery rakhne ke liye files select mat karo.
+                    </p>
+
+                    <label>
+                        <input type="checkbox" name="clear_gallery" value="true">
+                        Purani gallery clear karo
+                    </label>
+                </div>
+
+                <div class="field full">
+                    <label>
+                        <input type="checkbox" name="is_available" value="true"
+                            {% if car.get('is_available') %}checked{% endif %}>
+                        Car available for rent
+                    </label>
+                </div>
+
+                <div class="field full">
+                    <button type="submit">Save Car Changes</button>
+                </div>
+            </div>
+        </form>
+    </section>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route("/admin/cars/<int:car_id>/edit", methods=["GET", "POST"])
+@admin_required
+def admin_edit_car(car_id):
+    try:
+        result = (
+            supabase.table("cars")
+            .select("*")
+            .eq("id", car_id)
+            .limit(1)
+            .execute()
+        )
+
+        rows = result.data or []
+
+        if not rows:
+            flash("Car nahi mili.")
+            return redirect(url_for("admin_dashboard"))
+
+        car = rows[0]
+
+        if request.method == "GET":
+            return render_template_string(EDIT_CAR_HTML, car=car)
+
+        if not valid_csrf():
+            flash("Invalid form session. Dobara try karo.")
+            return redirect(url_for("admin_edit_car", car_id=car_id))
+
+        name = request.form.get("name", "").strip()
+        brand = request.form.get("brand", "").strip()
+        price_text = request.form.get("price", "").strip()
+        year_text = request.form.get("year", "").strip()
+
+        if not name or not brand or not price_text or not year_text:
+            raise ValueError("Name, brand, price aur year required hain.")
+
+        try:
+            price = float(price_text)
+            year = int(year_text)
+        except ValueError:
+            raise ValueError("Price aur year valid numbers hone chahiye.")
+
+        if price < 0:
+            raise ValueError("Price negative nahi ho sakti.")
+
+        if year < 1900 or year > 2100:
+            raise ValueError("Year valid range mein enter karo.")
+
+        main_image_url = car.get("main_image") or car.get("image_url")
+
+        new_main_file = request.files.get("main_image")
+
+        # No new main image selected means keep the current one.
+        if new_main_file and new_main_file.filename:
+            main_image_url = upload_car_image(new_main_file)
+
+        gallery_urls = car.get("gallery_images") or []
+
+        new_gallery_files = [
+            file for file in request.files.getlist("gallery_images")
+            if file and file.filename
+        ]
+
+        if len(new_gallery_files) > MAX_GALLERY_IMAGES:
+            raise ValueError(
+                f"Maximum {MAX_GALLERY_IMAGES} gallery images allowed hain."
+            )
+
+        if request.form.get("clear_gallery") == "true":
+            gallery_urls = []
+
+        # Selecting new gallery files replaces the existing gallery.
+        if new_gallery_files:
+            gallery_urls = []
+
+            for gallery_file in new_gallery_files:
+                gallery_urls.append(upload_car_image(gallery_file))
+
+        features_text = request.form.get("features", "")
+        features = [
+            line.strip()
+            for line in features_text.splitlines()
+            if line.strip()
+        ]
+
+        updated_data = {
+            "name": name,
+            "brand": brand,
+            "price": price,
+            "year": year,
+            "fuel": request.form.get("fuel", "").strip(),
+            "transmission": request.form.get("transmission", "").strip(),
+            "description": request.form.get("description", "").strip(),
+            "is_available": request.form.get("is_available") == "true",
+
+            "image_url": main_image_url,
+            "main_image": main_image_url,
+            "gallery_images": gallery_urls,
+
+            "category": request.form.get("category", "").strip(),
+            "ex_showroom_price": request.form.get("ex_showroom_price", "").strip(),
+            "km_included": request.form.get("km_included", "").strip(),
+            "seats": request.form.get("seats", "").strip(),
+            "mileage": request.form.get("mileage", "").strip(),
+            "gearbox": request.form.get("gearbox", "").strip(),
+            "engine": request.form.get("engine", "").strip(),
+            "max_power": request.form.get("max_power", "").strip(),
+            "max_torque": request.form.get("max_torque", "").strip(),
+            "fuel_tank": request.form.get("fuel_tank", "").strip(),
+            "boot_space": request.form.get("boot_space", "").strip(),
+            "ground_clearance": request.form.get("ground_clearance", "").strip(),
+            "dimensions": request.form.get("dimensions", "").strip(),
+            "wheelbase": request.form.get("wheelbase", "").strip(),
+            "features": features,
+            "competitors": request.form.get("competitors", "").strip(),
+            "guarantee": request.form.get("guarantee", "").strip(),
+        }
+
+        # UPDATE existing row; does not create a duplicate.
+        (
+            supabase.table("cars")
+            .update(updated_data)
+            .eq("id", car_id)
+            .execute()
+        )
+
+        flash("Car details successfully update ho gayi!")
+        return redirect(url_for("admin_dashboard"))
+
+    except ValueError as error:
+        flash(str(error))
+        return redirect(url_for("admin_edit_car", car_id=car_id))
+
+    except Exception:
+        app.logger.exception("Edit car failed")
+        return (
+            "Car update nahi ho paayi. Supabase columns, Storage aur server logs check karo.",
+            500,
+        )
 
 
 # =========================================================

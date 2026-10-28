@@ -481,7 +481,7 @@ def admin_login():
         password = request.form.get("password", "").strip()
 
         try:
-            res = supabase.table("admin_users").select("*").eq("username", username).limit(1).execute()
+            res = supabase.table("admin").select("*").eq("username", username).limit(1).execute()
             user = res.data[0] if res.data else None
             # Plain text check without hashing
             if user and verify_password(user.get("password"), password):

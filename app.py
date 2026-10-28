@@ -291,7 +291,7 @@ CAR_SECTIONS = [
         F("price", "Rental price per day (INR)", "number", required=True, min=0, step="0.01"),
         F("ex_showroom_price", "Ex-showroom price", placeholder="Rs 6.66 - 9.88 Lakh"),
         F("km_included", "Kilometres included per day", placeholder="300 km/day"),
-        F("guarantee", "Guarantee / rental terms", placeholder="Kota Carz rental guarantee"),
+        F("guarantee", "Guarantee / rental terms", placeholder="Vishal Car  rental guarantee"),
     ]),
     ("Specifications", [
         F("fuel", "Fuel", "select", options=FUELS),

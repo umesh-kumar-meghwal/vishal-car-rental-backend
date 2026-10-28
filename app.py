@@ -530,7 +530,7 @@ MAIN_TEMPLATES = {
         </td>
         <td>{{ car.category }}</td>
         <td><strong>₹{{ car.price_per_day }}</strong> / day</td>
-        <td>{{ car.fuel_type }} · {{ car.transmission }}</td>
+        <td>{{ car.fuel }} · {{ car.transmission }}</td>
         <td>
           <span class="badge {{ 'badge-on' if car.is_available else 'badge-off' }}">
             {{ 'Available' if car.is_available else 'Unavailable' }}
@@ -604,7 +604,7 @@ MAIN_TEMPLATES = {
         <label>Fuel Type *</label>
         <select name="fuel_type">
           {% for f in ['Diesel', 'Petrol', 'CNG', 'Electric'] %}
-            <option value="{{ f }}" {{ 'selected' if car and car.fuel_type == f else '' }}>{{ f }}</option>
+            <option value="{{ f }}" {{ 'selected' if car and car.fuel == f else '' }}>{{ f }}</option>
           {% endfor %}
         </select>
       </div>

@@ -7,41 +7,41 @@ from functools import wraps
 
 from flask import (
     Flask, request, jsonify, session, redirect, url_for,
-    render_template_string, flash
+    render_template, flash
 )
 from flask_cors import CORS
+from jinja2 import DictLoader, ChoiceLoader
 from supabase import create_client
 from werkzeug.utils import secure_filename
 
-from extra_routes import register_extra_routes
+from extra_routes import register_extra_routes, EXTRA_TEMPLATES
+
+# ==========================================
+# INITIALIZATION & CONFIG
+# ==========================================
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-vishal-car-rental-2025")
 app.config["MAX_CONTENT_LENGTH"] = 90 * 1024 * 1024
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 MAX_IMAGE_SIZE = 8 * 1024 * 1024
-MAX_GALLERY_IMAGES = 10
 STORAGE_BUCKET = "car-images"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be provided.")
+    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables are missing!")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-if allowed_origins:
-    CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+CORS(app)
 
 
 # ==========================================
-# AUTH & CSRF (Plain-text Password Check)
+# CSRF & SIMPLE AUTH (WITHOUT HASH)
 # ==========================================
 
 def get_csrf_token():
@@ -67,7 +67,7 @@ def admin_required(view_function):
     return wrapped
 
 
-# Plain-text password verification (Without Hash)
+# Plain Text Password Verification (Without Hash)
 def verify_password(stored, given):
     return str(stored or "").strip() == str(given or "").strip()
 
@@ -86,32 +86,30 @@ def login_blocked(limit=10, window=300):
 
 
 # ==========================================
-# IMAGE UPLOAD HELPER
+# IMAGE UPLOAD
 # ==========================================
 
 def upload_car_image(file):
     if not file or not file.filename:
-        raise ValueError("Please choose an image file.")
+        raise ValueError("Please select an image file.")
 
     orig = secure_filename(file.filename)
     if "." not in orig:
-        raise ValueError("Image extension missing.")
+        raise ValueError("Invalid file name.")
 
     ext = orig.rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_IMAGE_EXTENSIONS:
-        raise ValueError("Only JPG, JPEG, PNG, and WEBP formats are accepted.")
+        raise ValueError("Only JPG, JPEG, PNG, and WEBP formats are allowed.")
 
     content = file.read()
     if not content:
-        raise ValueError("Uploaded image file is empty.")
+        raise ValueError("File is empty.")
     if len(content) > MAX_IMAGE_SIZE:
-        raise ValueError("Image size exceeds the 8MB limit.")
+        raise ValueError("Image must be smaller than 8 MB.")
 
     mime = {
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "png": "image/png",
-        "webp": "image/webp"
+        "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "png": "image/png", "webp": "image/webp"
     }.get(ext, "application/octet-stream")
 
     path = f"fleet/{uuid.uuid4().hex}.{ext}"
@@ -126,10 +124,39 @@ def upload_car_image(file):
 
 
 # ==========================================
-# BASE MODERN ADMIN SHELL
+# PUBLIC API
 # ==========================================
 
-BASE_ADMIN_HTML = """
+@app.route("/")
+def index():
+    return jsonify({
+        "status": "online",
+        "service": "Vishal Car Rental API",
+        "admin": "/admin/login",
+        "cars": "/api/cars"
+    })
+
+@app.route("/api/cars", methods=["GET"])
+def api_cars():
+    try:
+        res = supabase.table("cars").select("*").eq("is_available", True).order("created_at", desc=True).execute()
+        cars = res.data or []
+        for car in cars:
+            if not car.get("main_image"):
+                car["main_image"] = car.get("image_url")
+            car["features"] = car.get("features") or []
+        return jsonify({"cars": cars}), 200
+    except Exception as e:
+        app.logger.exception("Failed to fetch cars")
+        return jsonify({"error": "Unable to load cars"}), 500
+
+
+# ==========================================
+# JINJA TEMPLATES (BASE + FLEET PAGES)
+# ==========================================
+
+MAIN_TEMPLATES = {
+"base.html": """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -142,10 +169,8 @@ BASE_ADMIN_HTML = """
     :root {
       --primary: #4f46e5;
       --primary-hover: #4338ca;
-      --primary-light: #eef2ff;
-      --sidebar: #0f172a;
+      --sidebar-bg: #0f172a;
       --sidebar-hover: #1e293b;
-      --sidebar-active: #312e81;
       --bg: #f8fafc;
       --card: #ffffff;
       --text: #0f172a;
@@ -167,9 +192,8 @@ BASE_ADMIN_HTML = """
     a { color: inherit; text-decoration: none; }
     .layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
     
-    /* Sidebar */
     aside {
-      background: var(--sidebar);
+      background: var(--sidebar-bg);
       color: #94a3b8;
       padding: 24px 16px;
       position: sticky;
@@ -184,7 +208,6 @@ BASE_ADMIN_HTML = """
       display: flex;
       align-items: center;
       gap: 12px;
-      color: #fff;
       padding: 0 8px 24px;
       border-bottom: 1px solid #1e293b;
       margin-bottom: 16px;
@@ -238,7 +261,6 @@ BASE_ADMIN_HTML = """
     }
     .btn-logout:hover { background: #ef4444; color: #fff; }
 
-    /* Main Area */
     main { padding: 32px; max-width: 1320px; width: 100%; margin: 0 auto; }
     .header {
       display: flex;
@@ -251,7 +273,6 @@ BASE_ADMIN_HTML = """
     h1 { margin: 0; font-size: 24px; font-weight: 800; color: #0f172a; }
     .subhead { color: var(--muted); margin: 4px 0 0; }
     
-    /* Common UI components */
     .card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -386,7 +407,7 @@ BASE_ADMIN_HTML = """
         ✉️ Contact Inquiries
       </a>
       <a href="{{ url_for('admin_subscribers_page') }}" class="{{ 'active' if active_nav == 'subscribers' else '' }}">
-        📫 Newsletter Subscribers
+        📫 Subscribers
       </a>
     </nav>
 
@@ -412,13 +433,9 @@ BASE_ADMIN_HTML = """
 </div>
 </body>
 </html>
-"""
+""",
 
-# ==========================================
-# AUTH VIEWS
-# ==========================================
-
-LOGIN_HTML = """
+"login.html": """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -449,7 +466,7 @@ LOGIN_HTML = """
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
-        <label>Admin Username</label>
+        <label>Username</label>
         <input type="text" name="username" required autofocus placeholder="admin">
       </div>
       <div class="field">
@@ -461,61 +478,15 @@ LOGIN_HTML = """
   </div>
 </body>
 </html>
-"""
+""",
 
-@app.route("/admin/login", methods=["GET", "POST"])
-def admin_login():
-    if session.get("admin_logged_in"):
-        return redirect(url_for("admin_dashboard"))
-
-    if request.method == "POST":
-        if not valid_csrf():
-            flash("Invalid form session. Please try again.", "err")
-            return render_template_string(LOGIN_HTML)
-
-        if login_blocked():
-            flash("Too many failed attempts. Try again in 5 minutes.", "err")
-            return render_template_string(LOGIN_HTML)
-
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
-
-        try:
-            res = supabase.table("admin").select("*").eq("username", username).limit(1).execute()
-            user = res.data[0] if res.data else None
-            # Plain text check without hashing
-            if user and verify_password(user.get("password"), password):
-                session.clear()
-                session["admin_logged_in"] = True
-                session["admin_user"] = user.get("username")
-                flash("Signed in successfully.", "ok")
-                return redirect(url_for("admin_dashboard"))
-
-            _login_fails[_client_ip()].append(time.time())
-            flash("Invalid username or password.", "err")
-        except Exception:
-            app.logger.exception("Login lookup error")
-            flash("Authentication service error.", "err")
-
-    return render_template_string(LOGIN_HTML)
-
-
-@app.route("/admin/logout", methods=["POST"])
-def admin_logout():
-    session.clear()
-    return redirect(url_for("admin_login"))
-
-
-# ==========================================
-# FLEET MANAGEMENT (CARS)
-# ==========================================
-
-CARS_LIST_HTML = BASE_ADMIN_HTML + """
+"cars_list.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Fleet Vehicles</h1>
-    <p class="subhead">Manage your car fleet availability, specs, and pricing</p>
+    <p class="subhead">Manage vehicle inventory, availability, and pricing</p>
   </div>
   <a href="{{ url_for('admin_add_car_page') }}" class="btn">➕ Add New Vehicle</a>
 </div>
@@ -561,7 +532,7 @@ CARS_LIST_HTML = BASE_ADMIN_HTML + """
                 {{ 'Hide' if car.is_available else 'Show' }}
               </button>
             </form>
-            <form method="POST" action="{{ url_for('admin_delete_car', car_id=car.id) }}" onsubmit="return confirm('Delete this vehicle permanently?')">
+            <form method="POST" action="{{ url_for('admin_delete_car', car_id=car.id) }}" onsubmit="return confirm('Permanently delete this vehicle?')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-sm" type="submit">Delete</button>
             </form>
@@ -569,20 +540,21 @@ CARS_LIST_HTML = BASE_ADMIN_HTML + """
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No vehicles found in your fleet.</td></tr>
+      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No vehicles in fleet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endblock %}
-"""
+""",
 
-CAR_ADD_HTML = BASE_ADMIN_HTML + """
+"cars_add.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Add New Vehicle</h1>
-    <p class="subhead">Add a new car to your public fleet listing</p>
+    <p class="subhead">Create a new vehicle listing for customers to browse</p>
   </div>
   <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">&larr; Back to Fleet</a>
 </div>
@@ -597,7 +569,7 @@ CAR_ADD_HTML = BASE_ADMIN_HTML + """
       </div>
       <div class="field">
         <label>Category *</label>
-        <input name="category" placeholder="SUV / Sedan / Hatchback / Luxury" required>
+        <input name="category" placeholder="SUV / Sedan / Hatchback" required>
       </div>
       <div class="field">
         <label>Rental Price Per Day (₹) *</label>
@@ -628,45 +600,102 @@ CAR_ADD_HTML = BASE_ADMIN_HTML + """
         </select>
       </div>
       <div class="field form-full">
-        <label>Features (comma separated)</label>
-        <input name="features" placeholder="Air Conditioning, Bluetooth Audio, Power Windows, GPS Navigation">
+        <label>Features (comma-separated)</label>
+        <input name="features" placeholder="Air Conditioning, Bluetooth, GPS, Power Steering">
       </div>
       <div class="field form-full">
-        <label>Vehicle Description</label>
-        <textarea name="description" placeholder="Brief overview of the vehicle condition, ideal routes, etc."></textarea>
+        <label>Description</label>
+        <textarea name="description" placeholder="Brief details about the condition, luggage room, etc."></textarea>
       </div>
       <div class="field form-full">
-        <label>Main Showcase Image *</label>
+        <label>Vehicle Image *</label>
         <input type="file" name="main_image" accept=".jpg,.jpeg,.png,.webp" required>
       </div>
     </div>
-    <div style="margin-top:24px;">
+    <div style="margin-top:20px;">
       <button class="btn" type="submit">Save and Publish Vehicle</button>
     </div>
   </form>
 </div>
 {% endblock %}
 """
+}
+
+# Combine templates from both files so inheritance works cleanly
+all_templates = {**MAIN_TEMPLATES, **EXTRA_TEMPLATES}
+app.jinja_loader = ChoiceLoader([DictLoader(all_templates), app.jinja_loader])
+
+
+# ==========================================
+# AUTH VIEWS
+# ==========================================
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if session.get("admin_logged_in"):
+        return redirect(url_for("admin_dashboard"))
+
+    if request.method == "POST":
+        if not valid_csrf():
+            flash("Invalid form session token.", "err")
+            return render_template("login.html")
+
+        if login_blocked():
+            flash("Too many failed attempts. Try again in 5 minutes.", "err")
+            return render_template("login.html")
+
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
+
+        try:
+            res = supabase.table("admin_users").select("*").eq("username", username).limit(1).execute()
+            user = res.data[0] if res.data else None
+            # Plain Text Password Check Without Hash
+            if user and verify_password(user.get("password"), password):
+                session.clear()
+                session["admin_logged_in"] = True
+                session["admin_user"] = user.get("username")
+                flash("Signed in successfully.", "ok")
+                return redirect(url_for("admin_dashboard"))
+
+            _login_fails[_client_ip()].append(time.time())
+            flash("Invalid username or password.", "err")
+        except Exception:
+            app.logger.exception("Login database query failed")
+            flash("Authentication service error. Check Supabase connection.", "err")
+
+    return render_template("login.html")
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.clear()
+    return redirect(url_for("admin_login"))
+
+
+# ==========================================
+# FLEET CONTROLLERS
+# ==========================================
 
 @app.route("/admin")
 @app.route("/admin/dashboard")
 @admin_required
 def admin_dashboard():
     cars = supabase.table("cars").select("*").order("created_at", desc=True).execute().data or []
-    return render_template_string(CARS_LIST_HTML, title="Fleet Management", active_nav="fleet", cars=cars)
+    return render_template("cars_list.html", title="Fleet Management", active_nav="fleet", cars=cars)
 
 
 @app.route("/admin/cars/new")
 @admin_required
 def admin_add_car_page():
-    return render_template_string(CAR_ADD_HTML, title="Add Vehicle", active_nav="add_car")
+    return render_template("cars_add.html", title="Add Vehicle", active_nav="add_car")
 
 
 @app.route("/admin/cars", methods=["POST"])
 @admin_required
 def admin_create_car():
     if not valid_csrf():
-        flash("Invalid form session.", "err")
+        flash("Invalid form session token.", "err")
         return redirect(url_for("admin_add_car_page"))
 
     try:
@@ -699,7 +728,6 @@ def admin_create_car():
 @admin_required
 def admin_toggle_car(car_id):
     if not valid_csrf():
-        flash("Invalid CSRF token.", "err")
         return redirect(url_for("admin_dashboard"))
     try:
         car = supabase.table("cars").select("is_available").eq("id", car_id).limit(1).execute().data
@@ -707,7 +735,7 @@ def admin_toggle_car(car_id):
             supabase.table("cars").update({"is_available": not car[0]["is_available"]}).eq("id", car_id).execute()
             flash("Vehicle status updated.", "ok")
     except Exception:
-        flash("Could not update vehicle status.", "err")
+        flash("Failed to update status.", "err")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -715,21 +743,19 @@ def admin_toggle_car(car_id):
 @admin_required
 def admin_delete_car(car_id):
     if not valid_csrf():
-        flash("Invalid CSRF token.", "err")
         return redirect(url_for("admin_dashboard"))
     try:
         supabase.table("cars").delete().eq("id", car_id).execute()
         flash("Vehicle removed from fleet.", "ok")
     except Exception:
-        flash("Could not delete vehicle.", "err")
+        flash("Failed to delete vehicle.", "err")
     return redirect(url_for("admin_dashboard"))
 
 
 # ==========================================
-# ATTACH EXTRA DEDICATED ADMIN PAGES & APIS
+# REGISTER EXTRA ROUTES
 # ==========================================
-register_extra_routes(app, supabase, admin_required, valid_csrf, upload_car_image, BASE_ADMIN_HTML)
-
+register_extra_routes(app, supabase, admin_required, valid_csrf, upload_car_image)
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)

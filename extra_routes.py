@@ -1,6 +1,6 @@
 """
 extra_routes.py
-Dedicated pages for:
+Dedicated separate pages and API endpoints for:
 - Reviews (/admin/reviews)
 - Blog Articles (/admin/blogs & /admin/blogs/new)
 - Blog Comments (/admin/comments)
@@ -13,7 +13,7 @@ import time
 import secrets
 from collections import defaultdict, deque
 
-from flask import request, jsonify, redirect, url_for, flash, render_template_string
+from flask import request, jsonify, redirect, url_for, flash, render_template
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^[0-9+ ()-]{8,18}$")
@@ -45,15 +45,17 @@ def _slug(text):
 
 
 # =========================================================
-# DEDICATED SEPARATE HTML TEMPLATES
+# TEMPLATES FOR DEDICATED PAGES
 # =========================================================
 
-REVIEWS_HTML = """
+EXTRA_TEMPLATES = {
+"reviews.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Customer Reviews</h1>
-    <p class="subhead">Manage and moderate customer testimonials</p>
+    <p class="subhead">Manage and approve client testimonials</p>
   </div>
 </div>
 
@@ -67,8 +69,8 @@ REVIEWS_HTML = """
         <input name="name" required placeholder="John Doe">
       </div>
       <div class="field">
-        <label>Trip Route / City</label>
-        <input name="trip" placeholder="Kota to Jaipur">
+        <label>Trip Route</label>
+        <input name="trip" placeholder="Kota to Bundi">
       </div>
       <div class="field">
         <label>Rating *</label>
@@ -81,12 +83,12 @@ REVIEWS_HTML = """
         </select>
       </div>
       <div class="field form-full">
-        <label>Review Content *</label>
-        <textarea name="message" required placeholder="Write the review content here..."></textarea>
+        <label>Review Text *</label>
+        <textarea name="message" required placeholder="Write the testimonial here..."></textarea>
       </div>
     </div>
     <div style="margin-top:16px;">
-      <button class="btn" type="submit">Submit & Publish Review</button>
+      <button class="btn" type="submit">Submit & Publish</button>
     </div>
   </form>
 </div>
@@ -121,7 +123,7 @@ REVIEWS_HTML = """
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-secondary btn-sm" type="submit">{{ 'Hide' if r.is_approved else 'Approve' }}</button>
             </form>
-            <form method="POST" action="{{ url_for('admin_delete_review', item_id=r.id) }}" onsubmit="return confirm('Permanently delete review?')">
+            <form method="POST" action="{{ url_for('admin_delete_review', item_id=r.id) }}" onsubmit="return confirm('Delete this review permanently?')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-sm" type="submit">Delete</button>
             </form>
@@ -129,20 +131,21 @@ REVIEWS_HTML = """
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No reviews found.</td></tr>
+      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No customer reviews found.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endblock %}
-"""
+""",
 
-BLOGS_LIST_HTML = """
+"blogs.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Blog Articles</h1>
-    <p class="subhead">Manage travel guides, news, and rental advice articles</p>
+    <p class="subhead">Manage guides, tour suggestions, and company news</p>
   </div>
   <a href="{{ url_for('admin_add_blog_page') }}" class="btn">✍️ Write New Article</a>
 </div>
@@ -164,23 +167,23 @@ BLOGS_LIST_HTML = """
       <tr>
         <td>
           <strong>{{ b.title }}</strong><br>
-          <small style="color:var(--muted)">Slug: /blogs/{{ b.slug }}</small>
+          <small style="color:var(--muted)">Slug: /{{ b.slug }}</small>
         </td>
         <td>{{ b.category or 'General' }}</td>
         <td>{{ b.author }}</td>
         <td>{{ b.read_minutes }} min</td>
         <td>
           <span class="badge {{ 'badge-on' if b.is_published else 'badge-off' }}">
-            {{ 'Published' if b.is_published else 'Draft' }}
+            {{ 'Published' if b.is_published else 'Hidden' }}
           </span>
         </td>
         <td>
           <div style="display:flex; gap:8px;">
             <form method="POST" action="{{ url_for('admin_toggle_blog', item_id=b.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-secondary btn-sm" type="submit">{{ 'Unpublish' if b.is_published else 'Publish' }}</button>
+              <button class="btn btn-secondary btn-sm" type="submit">{{ 'Hide' if b.is_published else 'Publish' }}</button>
             </form>
-            <form method="POST" action="{{ url_for('admin_delete_blog', item_id=b.id) }}" onsubmit="return confirm('Delete article permanently?')">
+            <form method="POST" action="{{ url_for('admin_delete_blog', item_id=b.id) }}" onsubmit="return confirm('Delete article?')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-sm" type="submit">Delete</button>
             </form>
@@ -188,20 +191,21 @@ BLOGS_LIST_HTML = """
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No articles published yet.</td></tr>
+      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No blog posts written yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endblock %}
-"""
+""",
 
-BLOG_ADD_HTML = """
+"blogs_add.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Write Blog Article</h1>
-    <p class="subhead">Create and publish insightful content for your visitors</p>
+    <p class="subhead">Draft and publish content for your website visitors</p>
   </div>
   <a href="{{ url_for('admin_blogs_page') }}" class="btn btn-secondary">&larr; Back to Articles</a>
 </div>
@@ -211,12 +215,12 @@ BLOG_ADD_HTML = """
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-grid">
       <div class="field form-full">
-        <label>Article Title *</label>
-        <input name="title" required placeholder="Top 5 Weekend Getaways from Kota">
+        <label>Title *</label>
+        <input name="title" required placeholder="Top 5 Weekend Road Trips from Kota">
       </div>
       <div class="field">
         <label>Category</label>
-        <input name="category" placeholder="Travel Guides / Road Trips / Tips">
+        <input name="category" placeholder="Travel Guides / Tips / Updates">
       </div>
       <div class="field">
         <label>Author</label>
@@ -231,12 +235,12 @@ BLOG_ADD_HTML = """
         <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
       </div>
       <div class="field form-full">
-        <label>Short Excerpt (SEO Description) *</label>
-        <textarea name="excerpt" style="min-height:70px;" required placeholder="A brief one or two sentence summary shown on search results and lists..."></textarea>
+        <label>Short Excerpt (SEO Summary) *</label>
+        <textarea name="excerpt" style="min-height:70px;" required placeholder="Brief 1-2 sentence overview..."></textarea>
       </div>
       <div class="field form-full">
-        <label>Article Content * (Paragraphs separated by blank line)</label>
-        <textarea name="content" style="min-height:250px;" required placeholder="Write your full article content here..."></textarea>
+        <label>Article Content * (Separate paragraphs with blank lines)</label>
+        <textarea name="content" style="min-height:250px;" required placeholder="Write the full post here..."></textarea>
       </div>
     </div>
     <div style="margin-top:20px;">
@@ -245,14 +249,15 @@ BLOG_ADD_HTML = """
   </form>
 </div>
 {% endblock %}
-"""
+""",
 
-COMMENTS_HTML = """
+"comments.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Blog Comments</h1>
-    <p class="subhead">Moderate user responses submitted on your articles</p>
+    <p class="subhead">Moderate customer discussions on your blog posts</p>
   </div>
 </div>
 
@@ -263,7 +268,7 @@ COMMENTS_HTML = """
         <th>Commenter</th>
         <th>Email</th>
         <th>Article ID</th>
-        <th>Comment</th>
+        <th>Message</th>
         <th>Status</th>
         <th>Actions</th>
       </tr>
@@ -286,7 +291,7 @@ COMMENTS_HTML = """
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-secondary btn-sm" type="submit">{{ 'Hide' if c.is_approved else 'Approve' }}</button>
             </form>
-            <form method="POST" action="{{ url_for('admin_delete_comment', item_id=c.id) }}" onsubmit="return confirm('Delete comment?')">
+            <form method="POST" action="{{ url_for('admin_delete_comment', item_id=c.id) }}" onsubmit="return confirm('Delete this comment?')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-sm" type="submit">Delete</button>
             </form>
@@ -300,14 +305,15 @@ COMMENTS_HTML = """
   </table>
 </div>
 {% endblock %}
-"""
+""",
 
-FAQS_HTML = """
+"faqs.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Frequently Asked Questions</h1>
-    <p class="subhead">Manage questions and answers displayed in customer help sections</p>
+    <p class="subhead">Manage common questions and answers for your customers</p>
   </div>
 </div>
 
@@ -319,11 +325,11 @@ FAQS_HTML = """
       <div class="field">
         <label>Category</label>
         <select name="category">
-          <option>Booking</option><option>Fleet & Specs</option><option>Pricing & Security</option><option>Documents Required</option><option>Cancellation</option>
+          <option>Booking</option><option>Fleet & Specs</option><option>Pricing & Deposit</option><option>Documents Required</option><option>Cancellation</option>
         </select>
       </div>
       <div class="field">
-        <label>Display Order Priority</label>
+        <label>Sort Order Priority</label>
         <input name="sort_order" type="number" value="0">
       </div>
       <div class="field form-full">
@@ -385,14 +391,15 @@ FAQS_HTML = """
   </table>
 </div>
 {% endblock %}
-"""
+""",
 
-MESSAGES_HTML = """
+"messages.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Contact Inquiries</h1>
-    <p class="subhead">Review customer contact form messages and inquiries</p>
+    <p class="subhead">Manage inquiries submitted through website contact forms</p>
   </div>
 </div>
 
@@ -403,7 +410,7 @@ MESSAGES_HTML = """
         <th>Date</th>
         <th>Contact Person</th>
         <th>Phone & Email</th>
-        <th>Message Details</th>
+        <th>Message</th>
         <th>Status</th>
         <th>Actions</th>
       </tr>
@@ -439,20 +446,21 @@ MESSAGES_HTML = """
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No customer inquiries received yet.</td></tr>
+      <tr><td colspan="6" style="text-align:center; padding:30px; color:var(--muted)">No contact messages found.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endblock %}
-"""
+""",
 
-SUBSCRIBERS_HTML = """
+"subscribers.html": """
+{% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Newsletter Subscribers</h1>
-    <p class="subhead">Email addresses collected from website subscription forms</p>
+    <p class="subhead">View and manage newsletter subscribers</p>
   </div>
 </div>
 
@@ -460,10 +468,10 @@ SUBSCRIBERS_HTML = """
   <table>
     <thead>
       <tr>
-        <th>Subscriber ID</th>
+        <th>ID</th>
         <th>Email Address</th>
         <th>Subscribed Date</th>
-        <th>Actions</th>
+        <th>Action</th>
       </tr>
     </thead>
     <tbody>
@@ -480,20 +488,21 @@ SUBSCRIBERS_HTML = """
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="4" style="text-align:center; padding:30px; color:var(--muted)">No subscribers signed up yet.</td></tr>
+      <tr><td colspan="4" style="text-align:center; padding:30px; color:var(--muted)">No newsletter subscribers found.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endblock %}
 """
+}
 
 
 # =========================================================
 # ROUTE REGISTRATION FUNCTION
 # =========================================================
 
-def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_image, base_template):
+def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_image):
 
     def fail(message, code=400):
         return jsonify({"error": message}), code
@@ -506,7 +515,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         return None
 
     # ------------------------------------------------------------
-    # PUBLIC APIS
+    # PUBLIC API ROUTES
     # ------------------------------------------------------------
     @app.route("/api/reviews", methods=["GET"])
     def api_reviews():
@@ -653,8 +662,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_reviews_page():
         rows = supabase.table("reviews").select("*").order("created_at", desc=True).limit(200).execute().data or []
-        html = base_template + REVIEWS_HTML
-        return render_template_string(html, title="Customer Reviews", active_nav="reviews", reviews=rows)
+        return render_template("reviews.html", title="Customer Reviews", active_nav="reviews", reviews=rows)
 
     @app.route("/admin/reviews/add", methods=["POST"])
     @admin_required
@@ -679,7 +687,6 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_toggle_review(item_id):
         if not valid_csrf():
-            flash("Invalid session.", "err")
             return redirect(url_for("admin_reviews_page"))
         try:
             row = supabase.table("reviews").select("is_approved").eq("id", item_id).limit(1).execute().data
@@ -694,7 +701,6 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_delete_review(item_id):
         if not valid_csrf():
-            flash("Invalid session.", "err")
             return redirect(url_for("admin_reviews_page"))
         try:
             supabase.table("reviews").delete().eq("id", item_id).execute()
@@ -710,14 +716,12 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_blogs_page():
         blogs = supabase.table("blogs").select("*").order("created_at", desc=True).limit(200).execute().data or []
-        html = base_template + BLOGS_LIST_HTML
-        return render_template_string(html, title="Blog Articles", active_nav="blogs", blogs=blogs)
+        return render_template("blogs.html", title="Blog Articles", active_nav="blogs", blogs=blogs)
 
     @app.route("/admin/blogs/new", methods=["GET"])
     @admin_required
     def admin_add_blog_page():
-        html = base_template + BLOG_ADD_HTML
-        return render_template_string(html, title="Write Article", active_nav="blogs")
+        return render_template("blogs_add.html", title="Write Article", active_nav="blogs")
 
     @app.route("/admin/blogs/create", methods=["POST"])
     @admin_required
@@ -787,8 +791,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_comments_page():
         rows = supabase.table("blog_comments").select("*").order("created_at", desc=True).limit(200).execute().data or []
-        html = base_template + COMMENTS_HTML
-        return render_template_string(html, title="Blog Comments", active_nav="comments", comments=rows)
+        return render_template("comments.html", title="Blog Comments", active_nav="comments", comments=rows)
 
     @app.route("/admin/comments/<int:item_id>/toggle", methods=["POST"])
     @admin_required
@@ -798,7 +801,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             row = supabase.table("blog_comments").select("is_approved").eq("id", item_id).limit(1).execute().data
             if row:
                 supabase.table("blog_comments").update({"is_approved": not row[0]["is_approved"]}).eq("id", item_id).execute()
-                flash("Comment status changed.", "ok")
+                flash("Comment status updated.", "ok")
         except Exception:
             flash("Failed to update comment.", "err")
         return redirect(url_for("admin_comments_page"))
@@ -821,8 +824,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_faqs_page():
         faqs = supabase.table("faqs").select("*").order("sort_order").order("id").execute().data or []
-        html = base_template + FAQS_HTML
-        return render_template_string(html, title="FAQs", active_nav="faqs", faqs=faqs)
+        return render_template("faqs.html", title="FAQs", active_nav="faqs", faqs=faqs)
 
     @app.route("/admin/faqs/add", methods=["POST"])
     @admin_required
@@ -836,7 +838,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
                 "sort_order": int(request.form.get("sort_order") or 0),
                 "is_published": True,
             }).execute()
-            flash("New FAQ added.", "ok")
+            flash("New FAQ added successfully.", "ok")
         except Exception:
             flash("Failed to add FAQ.", "err")
         return redirect(url_for("admin_faqs_page"))
@@ -872,8 +874,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_messages_page():
         messages = supabase.table("contact_messages").select("*").order("created_at", desc=True).limit(200).execute().data or []
-        html = base_template + MESSAGES_HTML
-        return render_template_string(html, title="Contact Inquiries", active_nav="messages", messages=messages)
+        return render_template("messages.html", title="Contact Inquiries", active_nav="messages", messages=messages)
 
     @app.route("/admin/messages/<int:item_id>/toggle", methods=["POST"])
     @admin_required
@@ -906,8 +907,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @admin_required
     def admin_subscribers_page():
         subs = supabase.table("subscribers").select("*").order("created_at", desc=True).limit(300).execute().data or []
-        html = base_template + SUBSCRIBERS_HTML
-        return render_template_string(html, title="Subscribers", active_nav="subscribers", subscribers=subs)
+        return render_template("subscribers.html", title="Subscribers", active_nav="subscribers", subscribers=subs)
 
     @app.route("/admin/subscribers/<int:item_id>/delete", methods=["POST"])
     @admin_required

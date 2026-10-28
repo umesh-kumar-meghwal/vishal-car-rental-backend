@@ -1,11 +1,8 @@
-
 import os
 import uuid
 import secrets
 import hmac
-import json
 
-from datetime import datetime
 from functools import wraps
 
 from flask import (
@@ -58,6 +55,7 @@ supabase = create_client(
     SUPABASE_SERVICE_ROLE_KEY
 )
 
+# ALLOWED_ORIGINS example: https://www.yourdomain.in,https://yourdomain.in
 allowed_origins = [
     origin.strip()
     for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
@@ -216,7 +214,7 @@ def get_cars():
 
         return jsonify({"cars": cars}), 200
 
-    except Exception as error:
+    except Exception:
         app.logger.exception("Could not fetch cars")
         return jsonify({
             "error": "Cars fetch nahi ho paayi."
@@ -233,7 +231,7 @@ LOGIN_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Admin Login | Kota Carz</title>
+    <title>Admin Login | Vishal Car Rental</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -276,7 +274,7 @@ LOGIN_HTML = """
 </head>
 <body>
     <div class="card">
-        <h1>Kota Carz Admin</h1>
+        <h1>Vishal Car Rental Admin</h1>
         <p>Login to manage your cars.</p>
 
         {% with messages = get_flashed_messages() %}
@@ -328,7 +326,9 @@ def admin_login():
 
             admins = result.data or []
 
-            if admins:
+            # SECURITY FIX: password hash bhi verify hota hai.
+            # admin.password_hash me werkzeug ka generate_password_hash() wala hash hona chahiye.
+            if admins and check_password_hash(admins[0]["password_hash"], password):
                 session.clear()
                 session["admin_logged_in"] = True
                 session["admin_username"] = admins[0]["username"]
@@ -355,7 +355,7 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Car Management | Kota Carz</title>
+    <title>Car Management | Vishal Car Rental</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -374,6 +374,8 @@ DASHBOARD_HTML = """
             flex-wrap: wrap;
             margin-bottom: 24px;
         }
+        .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .header-actions form { margin: 0; }
         .panel {
             background: white;
             padding: 22px;
@@ -449,10 +451,13 @@ DASHBOARD_HTML = """
                 Logged in as {{ session.get("admin_username", "Admin") }}
             </p>
         </div>
-        <form method="POST" action="{{ url_for('admin_logout') }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit">Logout</button>
-        </form>
+        <div class="header-actions">
+            <a class="button" href="{{ url_for('admin_content') }}">Reviews, Blogs &amp; FAQs</a>
+            <form method="POST" action="{{ url_for('admin_logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit">Logout</button>
+            </form>
+        </div>
     </header>
 
     {% with messages = get_flashed_messages() %}
@@ -597,7 +602,7 @@ DASHBOARD_HTML = """
 
                 <div class="field">
                     <label>Guarantee / Rental Terms</label>
-                    <input name="guarantee" placeholder="Kota Carz rental guarantee">
+                    <input name="guarantee" placeholder="Vishal Car Rental guarantee">
                 </div>
 
                 <div class="field full">
@@ -691,7 +696,7 @@ DASHBOARD_HTML = """
                             </form>
                             <form method="GET"
                                 action="{{ url_for('admin_edit_car', car_id=car.get('id')) }}"
-                                style="display:inline-block; margin-bottom:6px;">
+                                style="display:inline-block; margin-top:6px;">
                                 <button type="submit">Edit</button>
                             </form>
                         </td>
@@ -744,8 +749,6 @@ def admin_add_car():
         flash("Invalid form session. Dobara submit karo.")
         return redirect(url_for("admin_dashboard"))
 
-    uploaded_urls = []
-
     try:
         name = request.form.get("name", "").strip()
         brand = request.form.get("brand", "").strip()
@@ -784,15 +787,12 @@ def admin_add_car():
 
         # Upload the main image first.
         main_image_url = upload_car_image(main_file)
-        uploaded_urls.append(main_image_url)
 
         # Upload gallery images.
         gallery_urls = []
 
         for gallery_file in gallery_files:
-            image_url = upload_car_image(gallery_file)
-            uploaded_urls.append(image_url)
-            gallery_urls.append(image_url)
+            gallery_urls.append(upload_car_image(gallery_file))
 
         # Features are stored as a JSONB array.
         features_text = request.form.get("features", "")
@@ -903,27 +903,6 @@ def admin_logout():
 
 
 # =========================================================
-# ERROR HANDLERS
-# =========================================================
-
-@app.errorhandler(413)
-def file_too_large(error):
-    return (
-        "Upload size limit exceed ho gayi. Total upload 90 MB se kam rakho.",
-        413,
-    )
-
-
-@app.errorhandler(404)
-def page_not_found(error):
-    return jsonify({"error": "Page not found"}), 404
-
-
-@app.errorhandler(500)
-def internal_server_error(error):
-    return jsonify({"error": "Internal server error"}), 500
-
-# =========================================================
 # EDIT CAR
 # =========================================================
 
@@ -933,7 +912,7 @@ EDIT_CAR_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Edit Car | Kota Carz</title>
+    <title>Edit Car | Vishal Car Rental</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -1354,18 +1333,44 @@ def admin_edit_car(car_id):
         )
 
 
-
-
-
-
-
-
 # =========================================================
 # EXTRA ROUTES (reviews, blogs, faqs, contact, admin content)
 # =========================================================
-from extra_routes import *
+# IMPORTANT: extra_routes.py isi folder me hona chahiye.
+# Yahan upload_car_image pass hota hai (upload_image nahi).
+
+from extra_routes import register_extra_routes
+
+register_extra_routes(
+    app,
+    supabase,
+    admin_required,
+    valid_csrf,
+    upload_car_image,
+)
 
 
+# =========================================================
+# ERROR HANDLERS
+# (sabse last me, taaki saare routes register ho chuke hon)
+# =========================================================
+
+@app.errorhandler(413)
+def file_too_large(error):
+    return (
+        "Upload size limit exceed ho gayi. Total upload 90 MB se kam rakho.",
+        413,
+    )
+
+
+@app.errorhandler(404)
+def page_not_found(error):
+    return jsonify({"error": "Page not found"}), 404
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({"error": "Internal server error"}), 500
 
 
 # =========================================================

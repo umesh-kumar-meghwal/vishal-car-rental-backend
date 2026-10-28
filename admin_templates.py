@@ -148,13 +148,13 @@ BASE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ title }} - Kota Carz Admin</title>
+<title>{{ title }} - Vishal Car Rental Admin</title>
 {% include "styles.html" %}
 </head>
 <body>
 <input type="checkbox" id="nav-toggle" hidden>
 <aside class="sidebar">
-  <div class="brand"><span class="logo">K</span><div><b>Kota Carz</b><small>Admin panel</small></div></div>
+  <div class="brand"><span class="logo">K</span><div><b>Vishal Car Rental</b><small>Admin panel</small></div></div>
   <nav>
     {% for n in nav %}
       <a href="{{ url_for(n.endpoint) }}" class="{{ 'active' if active_nav == n.key }}">
@@ -202,7 +202,7 @@ LOGIN = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in - Kota Carz Admin</title>
+<title>Sign in - Vishal Car Rental Kota  Admin</title>
 {% include "styles.html" %}
 </head>
 <body>

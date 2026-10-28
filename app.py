@@ -16,10 +16,6 @@ from werkzeug.utils import secure_filename
 
 from extra_routes import register_extra_routes, EXTRA_TEMPLATES
 
-# ==========================================
-# INITIALIZATION & CONFIG
-# ==========================================
-
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-vishal-car-rental-2025")
 app.config["MAX_CONTENT_LENGTH"] = 90 * 1024 * 1024
@@ -34,14 +30,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables are missing!")
+    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be provided.")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 CORS(app)
 
 
 # ==========================================
-# CSRF & SIMPLE AUTH (WITHOUT HASH)
+# AUTH & CSRF (Plain-text Password Check)
 # ==========================================
 
 def get_csrf_token():
@@ -67,7 +63,6 @@ def admin_required(view_function):
     return wrapped
 
 
-# Plain Text Password Verification (Without Hash)
 def verify_password(stored, given):
     return str(stored or "").strip() == str(given or "").strip()
 
@@ -86,16 +81,16 @@ def login_blocked(limit=10, window=300):
 
 
 # ==========================================
-# IMAGE UPLOAD
+# IMAGE UPLOAD HELPER
 # ==========================================
 
 def upload_car_image(file):
     if not file or not file.filename:
-        raise ValueError("Please select an image file.")
+        return None
 
     orig = secure_filename(file.filename)
     if "." not in orig:
-        raise ValueError("Invalid file name.")
+        raise ValueError("Invalid file extension.")
 
     ext = orig.rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_IMAGE_EXTENSIONS:
@@ -124,7 +119,7 @@ def upload_car_image(file):
 
 
 # ==========================================
-# PUBLIC API
+# PUBLIC APIS
 # ==========================================
 
 @app.route("/")
@@ -144,15 +139,16 @@ def api_cars():
         for car in cars:
             if not car.get("main_image"):
                 car["main_image"] = car.get("image_url")
+            car["gallery_images"] = car.get("gallery_images") or []
             car["features"] = car.get("features") or []
         return jsonify({"cars": cars}), 200
-    except Exception as e:
+    except Exception:
         app.logger.exception("Failed to fetch cars")
         return jsonify({"error": "Unable to load cars"}), 500
 
 
 # ==========================================
-# JINJA TEMPLATES (BASE + FLEET PAGES)
+# JINJA TEMPLATES
 # ==========================================
 
 MAIN_TEMPLATES = {
@@ -178,6 +174,7 @@ MAIN_TEMPLATES = {
       --border: #e2e8f0;
       --danger: #ef4444;
       --success: #10b981;
+      --warning: #f59e0b;
       --radius: 12px;
       --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.04);
     }
@@ -298,6 +295,8 @@ MAIN_TEMPLATES = {
     .btn:hover { background: var(--primary-hover); }
     .btn-secondary { background: #f1f5f9; color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover { background: #e2e8f0; }
+    .btn-edit { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+    .btn-edit:hover { background: #fde68a; }
     .btn-danger { background: var(--danger); color: #fff; }
     .btn-danger:hover { background: #dc2626; }
     .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 6px; }
@@ -356,6 +355,19 @@ MAIN_TEMPLATES = {
       box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
     }
     textarea { min-height: 120px; }
+    .gallery-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .gallery-preview img {
+      width: 100px;
+      height: 65px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
 
     @media (max-width: 900px) {
       .layout { grid-template-columns: 1fr; }
@@ -512,7 +524,7 @@ MAIN_TEMPLATES = {
                  style="width:70px; height:45px; object-fit:cover; border-radius:6px; border:1px solid #cbd5e1;">
             <div>
               <strong style="display:block;">{{ car.name }}</strong>
-              <small style="color:var(--muted)">{{ car.seats }} Seats</small>
+              <small style="color:var(--muted)">{{ car.seats }} Seats | {{ (car.gallery_images or [])|length }} extra photos</small>
             </div>
           </div>
         </td>
@@ -526,6 +538,7 @@ MAIN_TEMPLATES = {
         </td>
         <td>
           <div style="display:flex; gap:8px;">
+            <a href="{{ url_for('admin_edit_car_page', car_id=car.id) }}" class="btn btn-edit btn-sm">Edit</a>
             <form method="POST" action="{{ url_for('admin_toggle_car', car_id=car.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-secondary btn-sm" type="submit">
@@ -548,72 +561,94 @@ MAIN_TEMPLATES = {
 {% endblock %}
 """,
 
-"cars_add.html": """
+"cars_form.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
-    <h1>Add New Vehicle</h1>
-    <p class="subhead">Create a new vehicle listing for customers to browse</p>
+    <h1>{{ 'Edit Vehicle' if car else 'Add New Vehicle' }}</h1>
+    <p class="subhead">{{ 'Modify existing vehicle specs & photos' if car else 'Add a new car to your fleet' }}</p>
   </div>
   <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">&larr; Back to Fleet</a>
 </div>
 
 <div class="card">
-  <form method="POST" action="{{ url_for('admin_create_car') }}" enctype="multipart/form-data">
+  <form method="POST" action="{{ url_for('admin_update_car', car_id=car.id) if car else url_for('admin_create_car') }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-grid">
       <div class="field">
         <label>Vehicle Name *</label>
-        <input name="name" placeholder="e.g. Maruti Suzuki Ertiga" required>
+        <input name="name" value="{{ car.name if car else '' }}" placeholder="e.g. Maruti Suzuki Ertiga" required>
       </div>
       <div class="field">
         <label>Category *</label>
-        <input name="category" placeholder="SUV / Sedan / Hatchback" required>
+        <input name="category" value="{{ car.category if car else '' }}" placeholder="SUV / Sedan / Hatchback" required>
       </div>
       <div class="field">
         <label>Rental Price Per Day (₹) *</label>
-        <input name="price_per_day" type="number" step="0.01" required placeholder="2500">
+        <input name="price_per_day" type="number" step="0.01" value="{{ car.price_per_day if car else '' }}" required placeholder="2500">
       </div>
       <div class="field">
         <label>Extra Km Rate (₹)</label>
-        <input name="price_per_km" type="number" step="0.01" placeholder="12">
+        <input name="price_per_km" type="number" step="0.01" value="{{ car.price_per_km if car else '' }}" placeholder="12">
       </div>
       <div class="field">
         <label>Seating Capacity *</label>
-        <input name="seats" type="number" value="5" min="2" max="20" required>
+        <input name="seats" type="number" value="{{ car.seats if car else 5 }}" min="2" max="20" required>
       </div>
       <div class="field">
         <label>Luggage Capacity (Bags)</label>
-        <input name="luggage_capacity" type="number" value="2" min="0">
+        <input name="luggage_capacity" type="number" value="{{ car.luggage_capacity if car else 2 }}" min="0">
       </div>
       <div class="field">
         <label>Fuel Type *</label>
         <select name="fuel_type">
-          <option>Diesel</option><option>Petrol</option><option>CNG</option><option>Electric</option>
+          {% for f in ['Diesel', 'Petrol', 'CNG', 'Electric'] %}
+            <option value="{{ f }}" {{ 'selected' if car and car.fuel_type == f else '' }}>{{ f }}</option>
+          {% endfor %}
         </select>
       </div>
       <div class="field">
         <label>Transmission *</label>
         <select name="transmission">
-          <option>Manual</option><option>Automatic</option>
+          {% for t in ['Manual', 'Automatic'] %}
+            <option value="{{ t }}" {{ 'selected' if car and car.transmission == t else '' }}>{{ t }}</option>
+          {% endfor %}
         </select>
       </div>
       <div class="field form-full">
         <label>Features (comma-separated)</label>
-        <input name="features" placeholder="Air Conditioning, Bluetooth, GPS, Power Steering">
+        <input name="features" value="{{ (car.features or [])|join(', ') if car else '' }}" placeholder="Air Conditioning, Bluetooth, GPS, Power Steering">
       </div>
       <div class="field form-full">
         <label>Description</label>
-        <textarea name="description" placeholder="Brief details about the condition, luggage room, etc."></textarea>
+        <textarea name="description" placeholder="Brief details about the condition, luggage room, etc.">{{ car.description if car else '' }}</textarea>
       </div>
-      <div class="field form-full">
-        <label>Vehicle Image *</label>
-        <input type="file" name="main_image" accept=".jpg,.jpeg,.png,.webp" required>
+
+      <div class="field">
+        <label>Main Showcase Image {{ '(Leave blank to keep existing)' if car else '*' }}</label>
+        <input type="file" name="main_image" accept=".jpg,.jpeg,.png,.webp" {{ '' if car else 'required' }}>
+        {% if car and (car.main_image or car.image_url) %}
+          <div style="margin-top:8px;">
+            <img src="{{ car.main_image or car.image_url }}" style="height:70px; border-radius:6px; border:1px solid #cbd5e1;">
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="field">
+        <label>Add Gallery Images (Upload Multiple Photos)</label>
+        <input type="file" name="gallery_images" accept=".jpg,.jpeg,.png,.webp" multiple>
+        {% if car and car.gallery_images %}
+          <div class="gallery-preview">
+            {% for g in car.gallery_images %}
+              <img src="{{ g }}">
+            {% endfor %}
+          </div>
+        {% endif %}
       </div>
     </div>
-    <div style="margin-top:20px;">
-      <button class="btn" type="submit">Save and Publish Vehicle</button>
+    <div style="margin-top:24px;">
+      <button class="btn" type="submit">{{ 'Update Vehicle' if car else 'Save and Publish Vehicle' }}</button>
     </div>
   </form>
 </div>
@@ -621,7 +656,6 @@ MAIN_TEMPLATES = {
 """
 }
 
-# Combine templates from both files so inheritance works cleanly
 all_templates = {**MAIN_TEMPLATES, **EXTRA_TEMPLATES}
 app.jinja_loader = ChoiceLoader([DictLoader(all_templates), app.jinja_loader])
 
@@ -650,7 +684,7 @@ def admin_login():
         try:
             res = supabase.table("admin_users").select("*").eq("username", username).limit(1).execute()
             user = res.data[0] if res.data else None
-            # Plain Text Password Check Without Hash
+            # Plain Text Password Comparison (Without Hash)
             if user and verify_password(user.get("password"), password):
                 session.clear()
                 session["admin_logged_in"] = True
@@ -662,7 +696,7 @@ def admin_login():
             flash("Invalid username or password.", "err")
         except Exception:
             app.logger.exception("Login database query failed")
-            flash("Authentication service error. Check Supabase connection.", "err")
+            flash("Authentication service error.", "err")
 
     return render_template("login.html")
 
@@ -674,7 +708,7 @@ def admin_logout():
 
 
 # ==========================================
-# FLEET CONTROLLERS
+# FLEET CONTROLLERS (ADD, EDIT, DELETE)
 # ==========================================
 
 @app.route("/admin")
@@ -688,7 +722,7 @@ def admin_dashboard():
 @app.route("/admin/cars/new")
 @admin_required
 def admin_add_car_page():
-    return render_template("cars_add.html", title="Add Vehicle", active_nav="add_car")
+    return render_template("cars_form.html", title="Add Vehicle", active_nav="add_car", car=None)
 
 
 @app.route("/admin/cars", methods=["POST"])
@@ -700,6 +734,14 @@ def admin_create_car():
 
     try:
         main_img = upload_car_image(request.files.get("main_image"))
+        gallery_files = request.files.getlist("gallery_images")
+        gallery_urls = []
+        for g_file in gallery_files:
+            if g_file and g_file.filename:
+                g_url = upload_car_image(g_file)
+                if g_url:
+                    gallery_urls.append(g_url)
+
         features = [f.strip() for f in request.form.get("features", "").split(",") if f.strip()]
 
         supabase.table("cars").insert({
@@ -715,13 +757,74 @@ def admin_create_car():
             "description": request.form.get("description", "").strip(),
             "main_image": main_img,
             "image_url": main_img,
+            "gallery_images": gallery_urls,
             "is_available": True
         }).execute()
-        flash("Vehicle published successfully.", "ok")
+        flash("Vehicle published successfully with photos.", "ok")
         return redirect(url_for("admin_dashboard"))
     except Exception as e:
         flash(f"Failed to add vehicle: {str(e)}", "err")
         return redirect(url_for("admin_add_car_page"))
+
+
+@app.route("/admin/cars/<int:car_id>/edit")
+@admin_required
+def admin_edit_car_page(car_id):
+    res = supabase.table("cars").select("*").eq("id", car_id).limit(1).execute().data
+    if not res:
+        flash("Vehicle not found.", "err")
+        return redirect(url_for("admin_dashboard"))
+    return render_template("cars_form.html", title="Edit Vehicle", active_nav="fleet", car=res[0])
+
+
+@app.route("/admin/cars/<int:car_id>/update", methods=["POST"])
+@admin_required
+def admin_update_car(car_id):
+    if not valid_csrf():
+        flash("Invalid form session token.", "err")
+        return redirect(url_for("admin_edit_car_page", car_id=car_id))
+
+    try:
+        existing = supabase.table("cars").select("*").eq("id", car_id).limit(1).execute().data[0]
+        
+        main_img = existing.get("main_image") or existing.get("image_url")
+        new_main = request.files.get("main_image")
+        if new_main and new_main.filename:
+            uploaded = upload_car_image(new_main)
+            if uploaded:
+                main_img = uploaded
+
+        gallery_urls = existing.get("gallery_images") or []
+        new_galleries = request.files.getlist("gallery_images")
+        for g_file in new_galleries:
+            if g_file and g_file.filename:
+                g_url = upload_car_image(g_file)
+                if g_url:
+                    gallery_urls.append(g_url)
+
+        features = [f.strip() for f in request.form.get("features", "").split(",") if f.strip()]
+
+        supabase.table("cars").update({
+            "name": request.form.get("name", "").strip(),
+            "category": request.form.get("category", "").strip(),
+            "price_per_day": float(request.form.get("price_per_day") or 0),
+            "price_per_km": float(request.form.get("price_per_km") or 0),
+            "seats": int(request.form.get("seats") or 5),
+            "luggage_capacity": int(request.form.get("luggage_capacity") or 2),
+            "fuel_type": request.form.get("fuel_type", "Diesel"),
+            "transmission": request.form.get("transmission", "Manual"),
+            "features": features,
+            "description": request.form.get("description", "").strip(),
+            "main_image": main_img,
+            "image_url": main_img,
+            "gallery_images": gallery_urls
+        }).eq("id", car_id).execute()
+
+        flash("Vehicle details and gallery updated.", "ok")
+        return redirect(url_for("admin_dashboard"))
+    except Exception as e:
+        flash(f"Failed to update vehicle: {str(e)}", "err")
+        return redirect(url_for("admin_edit_car_page", car_id=car_id))
 
 
 @app.route("/admin/cars/<int:car_id>/toggle", methods=["POST"])
@@ -752,9 +855,6 @@ def admin_delete_car(car_id):
     return redirect(url_for("admin_dashboard"))
 
 
-# ==========================================
-# REGISTER EXTRA ROUTES
-# ==========================================
 register_extra_routes(app, supabase, admin_required, valid_csrf, upload_car_image)
 
 if __name__ == "__main__":

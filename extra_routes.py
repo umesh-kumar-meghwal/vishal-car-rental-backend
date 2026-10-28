@@ -1,24 +1,12 @@
-"""
-extra_routes.py
-Dedicated separate pages and API endpoints for:
-- Reviews (/admin/reviews)
-- Blog Articles (/admin/blogs & /admin/blogs/new)
-- Blog Comments (/admin/comments)
-- FAQs (/admin/faqs)
-- Contact Messages (/admin/messages)
-- Newsletter Subscribers (/admin/subscribers)
-"""
 import re
 import time
 import secrets
 from collections import defaultdict, deque
-
 from flask import request, jsonify, redirect, url_for, flash, render_template
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^[0-9+ ()-]{8,18}$")
 _hits = defaultdict(deque)
-
 
 def _limited(limit=6, window=60):
     ip = (request.headers.get("X-Forwarded-For", request.remote_addr) or "?").split(",")[0].strip()
@@ -31,21 +19,18 @@ def _limited(limit=6, window=60):
     q.append(now)
     return False
 
-
 def _line(value, limit):
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
-
 def _text(value, limit):
     return str(value or "").replace("\r\n", "\n").strip()[:limit]
-
 
 def _slug(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:80] or "post"
 
 
 # =========================================================
-# TEMPLATES FOR DEDICATED PAGES
+# TEMPLATES WITH FULL EDIT CAPABILITIES
 # =========================================================
 
 EXTRA_TEMPLATES = {
@@ -55,7 +40,7 @@ EXTRA_TEMPLATES = {
 <div class="header">
   <div>
     <h1>Customer Reviews</h1>
-    <p class="subhead">Manage and approve client testimonials</p>
+    <p class="subhead">Manage and moderate customer reviews</p>
   </div>
 </div>
 
@@ -119,11 +104,12 @@ EXTRA_TEMPLATES = {
         </td>
         <td>
           <div style="display:flex; gap:8px;">
+            <a href="{{ url_for('admin_edit_review_page', item_id=r.id) }}" class="btn btn-edit btn-sm">Edit</a>
             <form method="POST" action="{{ url_for('admin_toggle_review', item_id=r.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-secondary btn-sm" type="submit">{{ 'Hide' if r.is_approved else 'Approve' }}</button>
             </form>
-            <form method="POST" action="{{ url_for('admin_delete_review', item_id=r.id) }}" onsubmit="return confirm('Delete this review permanently?')">
+            <form method="POST" action="{{ url_for('admin_delete_review', item_id=r.id) }}" onsubmit="return confirm('Delete this review?')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-sm" type="submit">Delete</button>
             </form>
@@ -139,13 +125,57 @@ EXTRA_TEMPLATES = {
 {% endblock %}
 """,
 
+"review_edit.html": """
+{% extends "base.html" %}
+{% block content %}
+<div class="header">
+  <div>
+    <h1>Edit Review</h1>
+    <p class="subhead">Modify review submitted by {{ review.name }}</p>
+  </div>
+  <a href="{{ url_for('admin_reviews_page') }}" class="btn btn-secondary">&larr; Back to Reviews</a>
+</div>
+
+<div class="card">
+  <form method="POST" action="{{ url_for('admin_update_review', item_id=review.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <div class="field">
+        <label>Customer Name *</label>
+        <input name="name" value="{{ review.name }}" required>
+      </div>
+      <div class="field">
+        <label>Trip Route</label>
+        <input name="trip" value="{{ review.trip or '' }}">
+      </div>
+      <div class="field">
+        <label>Rating *</label>
+        <select name="rating">
+          {% for i in range(5, 0, -1) %}
+            <option value="{{ i }}" {{ 'selected' if review.rating == i else '' }}>{{ i }} Stars</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field form-full">
+        <label>Review Text *</label>
+        <textarea name="message" required>{{ review.message }}</textarea>
+      </div>
+    </div>
+    <div style="margin-top:20px;">
+      <button class="btn" type="submit">Update Review</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+""",
+
 "blogs.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
     <h1>Blog Articles</h1>
-    <p class="subhead">Manage guides, tour suggestions, and company news</p>
+    <p class="subhead">Manage guides, tour suggestions, and articles</p>
   </div>
   <a href="{{ url_for('admin_add_blog_page') }}" class="btn">✍️ Write New Article</a>
 </div>
@@ -179,6 +209,7 @@ EXTRA_TEMPLATES = {
         </td>
         <td>
           <div style="display:flex; gap:8px;">
+            <a href="{{ url_for('admin_edit_blog_page', item_id=b.id) }}" class="btn btn-edit btn-sm">Edit</a>
             <form method="POST" action="{{ url_for('admin_toggle_blog', item_id=b.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-secondary btn-sm" type="submit">{{ 'Hide' if b.is_published else 'Publish' }}</button>
@@ -199,52 +230,57 @@ EXTRA_TEMPLATES = {
 {% endblock %}
 """,
 
-"blogs_add.html": """
+"blogs_form.html": """
 {% extends "base.html" %}
 {% block content %}
 <div class="header">
   <div>
-    <h1>Write Blog Article</h1>
-    <p class="subhead">Draft and publish content for your website visitors</p>
+    <h1>{{ 'Edit Blog Article' if blog else 'Write Blog Article' }}</h1>
+    <p class="subhead">{{ 'Modify article content and cover' if blog else 'Draft and publish new content' }}</p>
   </div>
   <a href="{{ url_for('admin_blogs_page') }}" class="btn btn-secondary">&larr; Back to Articles</a>
 </div>
 
 <div class="card">
-  <form method="POST" action="{{ url_for('admin_create_blog') }}" enctype="multipart/form-data">
+  <form method="POST" action="{{ url_for('admin_update_blog', item_id=blog.id) if blog else url_for('admin_create_blog') }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-grid">
       <div class="field form-full">
         <label>Title *</label>
-        <input name="title" required placeholder="Top 5 Weekend Road Trips from Kota">
+        <input name="title" value="{{ blog.title if blog else '' }}" required placeholder="Top 5 Weekend Road Trips from Kota">
       </div>
       <div class="field">
         <label>Category</label>
-        <input name="category" placeholder="Travel Guides / Tips / Updates">
+        <input name="category" value="{{ blog.category if blog else '' }}" placeholder="Travel Guides / Tips / Updates">
       </div>
       <div class="field">
         <label>Author</label>
-        <input name="author" value="Vishal Car Rental">
+        <input name="author" value="{{ blog.author if blog else 'Vishal Car Rental' }}">
       </div>
       <div class="field">
         <label>Read Time (minutes)</label>
-        <input name="read_minutes" type="number" value="4" min="1">
+        <input name="read_minutes" type="number" value="{{ blog.read_minutes if blog else 4 }}" min="1">
       </div>
       <div class="field">
-        <label>Cover Banner Image</label>
+        <label>Cover Banner Image {{ '(Upload only to replace)' if blog and blog.image_url else '' }}</label>
         <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
+        {% if blog and blog.image_url %}
+          <div style="margin-top:8px;">
+            <img src="{{ blog.image_url }}" style="height:60px; border-radius:6px;">
+          </div>
+        {% endif %}
       </div>
       <div class="field form-full">
         <label>Short Excerpt (SEO Summary) *</label>
-        <textarea name="excerpt" style="min-height:70px;" required placeholder="Brief 1-2 sentence overview..."></textarea>
+        <textarea name="excerpt" style="min-height:70px;" required placeholder="Brief 1-2 sentence overview...">{{ blog.excerpt if blog else '' }}</textarea>
       </div>
       <div class="field form-full">
-        <label>Article Content * (Separate paragraphs with blank lines)</label>
-        <textarea name="content" style="min-height:250px;" required placeholder="Write the full post here..."></textarea>
+        <label>Article Content * (Paragraphs separated by blank line)</label>
+        <textarea name="content" style="min-height:250px;" required placeholder="Write the full post here...">{{ blog.content if blog else '' }}</textarea>
       </div>
     </div>
     <div style="margin-top:20px;">
-      <button class="btn" type="submit">Publish Article</button>
+      <button class="btn" type="submit">{{ 'Update Article' if blog else 'Publish Article' }}</button>
     </div>
   </form>
 </div>
@@ -373,6 +409,7 @@ EXTRA_TEMPLATES = {
         </td>
         <td>
           <div style="display:flex; gap:8px;">
+            <a href="{{ url_for('admin_edit_faq_page', item_id=f.id) }}" class="btn btn-edit btn-sm">Edit</a>
             <form method="POST" action="{{ url_for('admin_toggle_faq', item_id=f.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-secondary btn-sm" type="submit">{{ 'Hide' if f.is_published else 'Show' }}</button>
@@ -389,6 +426,50 @@ EXTRA_TEMPLATES = {
       {% endfor %}
     </tbody>
   </table>
+</div>
+{% endblock %}
+""",
+
+"faq_edit.html": """
+{% extends "base.html" %}
+{% block content %}
+<div class="header">
+  <div>
+    <h1>Edit FAQ</h1>
+    <p class="subhead">Update question and answer guidelines</p>
+  </div>
+  <a href="{{ url_for('admin_faqs_page') }}" class="btn btn-secondary">&larr; Back to FAQs</a>
+</div>
+
+<div class="card">
+  <form method="POST" action="{{ url_for('admin_update_faq', item_id=faq.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <div class="field">
+        <label>Category</label>
+        <select name="category">
+          {% for c in ['Booking', 'Fleet & Specs', 'Pricing & Deposit', 'Documents Required', 'Cancellation'] %}
+            <option value="{{ c }}" {{ 'selected' if faq.category == c else '' }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Display Priority</label>
+        <input name="sort_order" type="number" value="{{ faq.sort_order }}">
+      </div>
+      <div class="field form-full">
+        <label>Question *</label>
+        <input name="question" value="{{ faq.question }}" required>
+      </div>
+      <div class="field form-full">
+        <label>Answer *</label>
+        <textarea name="answer" required>{{ faq.answer }}</textarea>
+      </div>
+    </div>
+    <div style="margin-top:20px;">
+      <button class="btn" type="submit">Update FAQ</button>
+    </div>
+  </form>
 </div>
 {% endblock %}
 """,
@@ -508,10 +589,8 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         return jsonify({"error": message}), code
 
     def guard(data):
-        if data.get("website"):
-            return jsonify({"ok": True}), 200
-        if _limited():
-            return fail("Too many requests. Please wait a minute and try again.", 429)
+        if data.get("website"): return jsonify({"ok": True}), 200
+        if _limited(): return fail("Too many requests. Please wait a minute and try again.", 429)
         return None
 
     # ------------------------------------------------------------
@@ -543,13 +622,13 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             rating = 0
 
         if len(name) < 2 or len(message) < 10 or not 1 <= rating <= 5:
-            return fail("Please provide a valid name, rating (1-5), and review text (min 10 characters).")
+            return fail("Please provide a valid name, rating (1-5), and review text.")
         try:
             supabase.table("reviews").insert({
                 "name": name, "trip": trip, "rating": rating,
                 "message": message, "is_approved": False,
             }).execute()
-            return jsonify({"ok": True, "message": "Review submitted successfully for approval."}), 201
+            return jsonify({"ok": True, "message": "Review submitted for approval."}), 201
         except Exception:
             return fail("Failed to record review.", 500)
 
@@ -638,7 +717,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             }).execute()
             return jsonify({"ok": True, "message": "Your message has been received."}), 201
         except Exception:
-            return fail("Failed to send your inquiry. Please try again later.", 500)
+            return fail("Failed to send inquiry.", 500)
 
     @app.route("/api/subscribe", methods=["POST"])
     def api_subscribe():
@@ -656,7 +735,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             return fail("Could not complete subscription.", 500)
 
     # ------------------------------------------------------------
-    # 1. DEDICATED REVIEWS PAGE
+    # 1. REVIEWS (LIST, ADD, EDIT, TOGGLE, DELETE)
     # ------------------------------------------------------------
     @app.route("/admin/reviews", methods=["GET"])
     @admin_required
@@ -667,9 +746,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @app.route("/admin/reviews/add", methods=["POST"])
     @admin_required
     def admin_add_review():
-        if not valid_csrf():
-            flash("Invalid session token.", "err")
-            return redirect(url_for("admin_reviews_page"))
+        if not valid_csrf(): return redirect(url_for("admin_reviews_page"))
         try:
             supabase.table("reviews").insert({
                 "name": _line(request.form.get("name"), 60),
@@ -678,16 +755,40 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
                 "message": _text(request.form.get("message"), 600),
                 "is_approved": True,
             }).execute()
-            flash("Customer review published successfully.", "ok")
+            flash("Review published successfully.", "ok")
         except Exception:
             flash("Failed to add review.", "err")
+        return redirect(url_for("admin_reviews_page"))
+
+    @app.route("/admin/reviews/<int:item_id>/edit")
+    @admin_required
+    def admin_edit_review_page(item_id):
+        res = supabase.table("reviews").select("*").eq("id", item_id).limit(1).execute().data
+        if not res:
+            flash("Review not found.", "err")
+            return redirect(url_for("admin_reviews_page"))
+        return render_template("review_edit.html", title="Edit Review", active_nav="reviews", review=res[0])
+
+    @app.route("/admin/reviews/<int:item_id>/update", methods=["POST"])
+    @admin_required
+    def admin_update_review(item_id):
+        if not valid_csrf(): return redirect(url_for("admin_reviews_page"))
+        try:
+            supabase.table("reviews").update({
+                "name": _line(request.form.get("name"), 60),
+                "trip": _line(request.form.get("trip"), 60),
+                "rating": max(1, min(5, int(request.form.get("rating", 5)))),
+                "message": _text(request.form.get("message"), 600),
+            }).eq("id", item_id).execute()
+            flash("Review updated.", "ok")
+        except Exception:
+            flash("Failed to update review.", "err")
         return redirect(url_for("admin_reviews_page"))
 
     @app.route("/admin/reviews/<int:item_id>/toggle", methods=["POST"])
     @admin_required
     def admin_toggle_review(item_id):
-        if not valid_csrf():
-            return redirect(url_for("admin_reviews_page"))
+        if not valid_csrf(): return redirect(url_for("admin_reviews_page"))
         try:
             row = supabase.table("reviews").select("is_approved").eq("id", item_id).limit(1).execute().data
             if row:
@@ -700,8 +801,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @app.route("/admin/reviews/<int:item_id>/delete", methods=["POST"])
     @admin_required
     def admin_delete_review(item_id):
-        if not valid_csrf():
-            return redirect(url_for("admin_reviews_page"))
+        if not valid_csrf(): return redirect(url_for("admin_reviews_page"))
         try:
             supabase.table("reviews").delete().eq("id", item_id).execute()
             flash("Review removed permanently.", "ok")
@@ -710,7 +810,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         return redirect(url_for("admin_reviews_page"))
 
     # ------------------------------------------------------------
-    # 2. DEDICATED BLOG ARTICLES PAGE
+    # 2. BLOGS (LIST, ADD, EDIT, TOGGLE, DELETE)
     # ------------------------------------------------------------
     @app.route("/admin/blogs", methods=["GET"])
     @admin_required
@@ -721,31 +821,22 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     @app.route("/admin/blogs/new", methods=["GET"])
     @admin_required
     def admin_add_blog_page():
-        return render_template("blogs_add.html", title="Write Article", active_nav="blogs")
+        return render_template("blogs_form.html", title="Write Article", active_nav="blogs", blog=None)
 
     @app.route("/admin/blogs/create", methods=["POST"])
     @admin_required
     def admin_create_blog():
-        if not valid_csrf():
-            flash("Invalid session token.", "err")
-            return redirect(url_for("admin_add_blog_page"))
+        if not valid_csrf(): return redirect(url_for("admin_add_blog_page"))
         try:
             title = _line(request.form.get("title"), 160)
             excerpt = _text(request.form.get("excerpt"), 400)
             content = _text(request.form.get("content"), 25000)
 
-            if not title or not excerpt or not content:
-                flash("Title, excerpt, and content are mandatory.", "err")
-                return redirect(url_for("admin_add_blog_page"))
-
             slug = _slug(title)
             if supabase.table("blogs").select("id").eq("slug", slug).limit(1).execute().data:
                 slug = f"{slug}-{secrets.token_hex(2)}"
 
-            img_url = None
-            f = request.files.get("image")
-            if f and f.filename:
-                img_url = upload_image(f)
+            img_url = upload_image(request.files.get("image"))
 
             supabase.table("blogs").insert({
                 "slug": slug, "title": title, "excerpt": excerpt, "content": content,
@@ -759,6 +850,42 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         except Exception as e:
             flash(f"Failed to publish article: {str(e)}", "err")
             return redirect(url_for("admin_add_blog_page"))
+
+    @app.route("/admin/blogs/<int:item_id>/edit")
+    @admin_required
+    def admin_edit_blog_page(item_id):
+        res = supabase.table("blogs").select("*").eq("id", item_id).limit(1).execute().data
+        if not res:
+            flash("Article not found.", "err")
+            return redirect(url_for("admin_blogs_page"))
+        return render_template("blogs_form.html", title="Edit Article", active_nav="blogs", blog=res[0])
+
+    @app.route("/admin/blogs/<int:item_id>/update", methods=["POST"])
+    @admin_required
+    def admin_update_blog(item_id):
+        if not valid_csrf(): return redirect(url_for("admin_blogs_page"))
+        try:
+            existing = supabase.table("blogs").select("image_url").eq("id", item_id).limit(1).execute().data[0]
+            img_url = existing.get("image_url")
+            new_img = request.files.get("image")
+            if new_img and new_img.filename:
+                uploaded = upload_image(new_img)
+                if uploaded: img_url = uploaded
+
+            supabase.table("blogs").update({
+                "title": _line(request.form.get("title"), 160),
+                "excerpt": _text(request.form.get("excerpt"), 400),
+                "content": _text(request.form.get("content"), 25000),
+                "category": _line(request.form.get("category"), 60) or "General",
+                "author": _line(request.form.get("author"), 60) or "Vishal Car Rental",
+                "read_minutes": max(1, int(request.form.get("read_minutes") or 4)),
+                "image_url": img_url
+            }).eq("id", item_id).execute()
+            flash("Article updated successfully.", "ok")
+            return redirect(url_for("admin_blogs_page"))
+        except Exception as e:
+            flash(f"Failed to update article: {str(e)}", "err")
+            return redirect(url_for("admin_edit_blog_page", item_id=item_id))
 
     @app.route("/admin/blogs/<int:item_id>/toggle", methods=["POST"])
     @admin_required
@@ -785,7 +912,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         return redirect(url_for("admin_blogs_page"))
 
     # ------------------------------------------------------------
-    # 3. DEDICATED BLOG COMMENTS PAGE
+    # 3. BLOG COMMENTS (LIST, TOGGLE, DELETE)
     # ------------------------------------------------------------
     @app.route("/admin/comments", methods=["GET"])
     @admin_required
@@ -818,7 +945,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         return redirect(url_for("admin_comments_page"))
 
     # ------------------------------------------------------------
-    # 4. DEDICATED FAQS PAGE
+    # 4. FAQS (LIST, ADD, EDIT, TOGGLE, DELETE)
     # ------------------------------------------------------------
     @app.route("/admin/faqs", methods=["GET"])
     @admin_required
@@ -838,9 +965,34 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
                 "sort_order": int(request.form.get("sort_order") or 0),
                 "is_published": True,
             }).execute()
-            flash("New FAQ added successfully.", "ok")
+            flash("New FAQ added.", "ok")
         except Exception:
             flash("Failed to add FAQ.", "err")
+        return redirect(url_for("admin_faqs_page"))
+
+    @app.route("/admin/faqs/<int:item_id>/edit")
+    @admin_required
+    def admin_edit_faq_page(item_id):
+        res = supabase.table("faqs").select("*").eq("id", item_id).limit(1).execute().data
+        if not res:
+            flash("FAQ not found.", "err")
+            return redirect(url_for("admin_faqs_page"))
+        return render_template("faq_edit.html", title="Edit FAQ", active_nav="faqs", faq=res[0])
+
+    @app.route("/admin/faqs/<int:item_id>/update", methods=["POST"])
+    @admin_required
+    def admin_update_faq(item_id):
+        if not valid_csrf(): return redirect(url_for("admin_faqs_page"))
+        try:
+            supabase.table("faqs").update({
+                "category": _line(request.form.get("category"), 40),
+                "question": _line(request.form.get("question"), 250),
+                "answer": _text(request.form.get("answer"), 1500),
+                "sort_order": int(request.form.get("sort_order") or 0),
+            }).eq("id", item_id).execute()
+            flash("FAQ updated successfully.", "ok")
+        except Exception:
+            flash("Failed to update FAQ.", "err")
         return redirect(url_for("admin_faqs_page"))
 
     @app.route("/admin/faqs/<int:item_id>/toggle", methods=["POST"])
@@ -868,7 +1020,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
         return redirect(url_for("admin_faqs_page"))
 
     # ------------------------------------------------------------
-    # 5. DEDICATED CONTACT INQUIRIES PAGE
+    # 5. CONTACT INQUIRIES & 6. SUBSCRIBERS
     # ------------------------------------------------------------
     @app.route("/admin/messages", methods=["GET"])
     @admin_required
@@ -900,9 +1052,6 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             flash("Could not delete message.", "err")
         return redirect(url_for("admin_messages_page"))
 
-    # ------------------------------------------------------------
-    # 6. DEDICATED SUBSCRIBERS PAGE
-    # ------------------------------------------------------------
     @app.route("/admin/subscribers", methods=["GET"])
     @admin_required
     def admin_subscribers_page():

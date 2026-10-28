@@ -49,6 +49,15 @@ def F(name, label, type="text", **kw):
 # =========================================================
 
 RESOURCES = {
+    "hero": dict(
+        table="hero", title="Hero image", singular="Hero image",
+        subtitle="Banner image(s) shown at the top of your website home page.",
+        empty="No hero image yet. Upload one to show it on your website.", can_create=True,
+        order=("id", False), toggle=None,
+        columns=[("Preview", "hero_img", "image"), ("ID", "id", "text")],
+        fields=[F("image", "Hero image", "image", column="hero_img", folder="hero", required=True,
+                  help="JPG, PNG or WEBP, up to 8 MB. Wide images (for example 1920 x 800) look best.")],
+    ),
     "reviews": dict(
         table="reviews", title="Reviews", singular="Review",
         subtitle="Customer testimonials shown on your website.",
@@ -78,7 +87,7 @@ RESOURCES = {
             F("category", "Category", max=60, placeholder="Travel guides"),
             F("author", "Author", max=60, default="Vishal Car Rental"),
             F("read_minutes", "Read time (minutes)", "number", min=1, max=120, default=4),
-            F("image", "Cover image", "image", column="image_url"),
+            F("image", "Cover image", "image", column="image_url", folder="blogs"),
             F("excerpt", "Short excerpt (SEO description)", "textarea", required=True, full=True, max=400, rows=3),
             F("content", "Content (separate paragraphs with a blank line)", "textarea",
               required=True, full=True, max=25000, rows=14),
@@ -156,7 +165,7 @@ HOOKS = {"blogs": _blog_before_create}
 # REGISTRATION
 # =========================================================
 
-def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_image):
+def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_image, delete_images=None):
 
     def fail(message, code=400):
         return jsonify({"error": message}), code
@@ -171,6 +180,18 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     # ------------------------------------------------------------
     # PUBLIC APIS
     # ------------------------------------------------------------
+    @app.route("/api/hero", methods=["GET"])
+    def api_hero():
+        try:
+            rows = supabase.table("hero").select("id,hero_img").order("id", desc=True).execute().data or []
+            images = [r["hero_img"] for r in rows if r.get("hero_img")]
+            resp = jsonify({"hero": images[0] if images else None, "images": images})
+            resp.headers["Cache-Control"] = "public, max-age=60"
+            return resp
+        except Exception:
+            app.logger.exception("Load hero failed")
+            return fail("Could not load hero image.", 500)
+
     @app.route("/api/reviews", methods=["GET"])
     def api_reviews():
         try:
@@ -311,7 +332,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
     # ------------------------------------------------------------
     # ADMIN CRUD PAGES (generated for every resource above)
     # ------------------------------------------------------------
-    def clean(res, form, files):
+    def clean(res, form, files, creating=False):
         """Validate form input and return a dict ready for Supabase."""
         data = {}
         for f in res["fields"]:
@@ -324,7 +345,9 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             if kind == "image":
                 upload = files.get(name)
                 if upload and upload.filename:
-                    data[f["column"]] = upload_image(upload)
+                    data[f["column"]] = upload_image(upload, f.get("folder", "misc"))
+                elif f.get("required") and creating:
+                    raise ValueError(f"{f['label']} is required.")
                 continue
 
             raw = form.get(name, "")
@@ -358,6 +381,19 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
             data[name] = value
         return data
 
+    def remove_replaced_images(res, old_row, new_data=None):
+        """Delete old storage files. new_data=None means the whole row was deleted."""
+        if not delete_images:
+            return
+        old = []
+        for f in res["fields"]:
+            if f["type"] == "image":
+                col = f["column"]
+                if old_row.get(col) and (new_data is None or new_data.get(col, old_row[col]) != old_row[col]):
+                    old.append(old_row[col])
+        if old:
+            delete_images(old)
+
     def get_row(res, item_id):
         rows = supabase.table(res["table"]).select("*").eq("id", item_id).limit(1).execute().data or []
         return rows[0] if rows else None
@@ -385,7 +421,7 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
                     flash("Your session expired. Please try again.", "err")
                     return redirect(url_for(f"admin_{key}_new"))
                 try:
-                    data = clean(res, request.form, request.files)
+                    data = clean(res, request.form, request.files, creating=True)
                     if key in HOOKS:
                         HOOKS[key](data, supabase)
                     supabase.table(res["table"]).insert(data).execute()
@@ -416,7 +452,9 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
                     return redirect(url_for(f"admin_{key}_edit", item_id=item_id))
                 try:
                     data = clean(res, request.form, request.files)
-                    supabase.table(res["table"]).update(data).eq("id", item_id).execute()
+                    if data:
+                        supabase.table(res["table"]).update(data).eq("id", item_id).execute()
+                    remove_replaced_images(res, row, data)
                     flash(f"{res['singular']} updated.", "ok")
                     return redirect(url_for(list_ep))
                 except ValueError as e:
@@ -449,7 +487,10 @@ def register_extra_routes(app, supabase, admin_required, valid_csrf, upload_imag
                 flash("Your session expired. Please try again.", "err")
                 return redirect(url_for(list_ep))
             try:
+                row = get_row(res, item_id)
                 supabase.table(res["table"]).delete().eq("id", item_id).execute()
+                if row:
+                    remove_replaced_images(res, row, None)
                 flash(f"{res['singular']} deleted.", "ok")
             except Exception:
                 app.logger.exception("Delete %s failed", key)

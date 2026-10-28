@@ -416,6 +416,7 @@ LIST = """{% extends "base.html" %}
           <td>
           {% if kind == 'strong' %}<strong>{{ r.get(k) or '-' }}</strong>
           {% elif kind == 'clamp' %}<div class="clamp">{{ r.get(k) or '-' }}</div>
+          {% elif kind == 'image' %}{% if r.get(k) %}<img class="thumb" src="{{ r.get(k) }}" alt="">{% else %}-{% endif %}
           {% elif kind == 'date' %}{{ (r.get(k) or '')[:10] or '-' }}
           {% elif kind == 'rating' %}{{ r.get(k) }} / 5
           {% elif kind == 'slug' %}<strong>{{ r.get('title') }}</strong><br><span class="muted">/blogs/{{ r.get(k) }}</span>

@@ -79,6 +79,7 @@ def admin_required(view_function):
 NAV = [
     {"key": "dashboard", "label": "Dashboard", "icon": "\U0001F4CA", "endpoint": "admin_dashboard"},
     {"key": "cars", "label": "Cars", "icon": "\U0001F697", "endpoint": "admin_cars"},
+    {"key": "hero", "label": "Hero image", "icon": "\U0001F5BC\uFE0F", "endpoint": "admin_hero"},
     {"key": "reviews", "label": "Reviews", "icon": "\u2B50", "endpoint": "admin_reviews"},
     {"key": "blogs", "label": "Blog articles", "icon": "\U0001F4DD", "endpoint": "admin_blogs"},
     {"key": "comments", "label": "Comments", "icon": "\U0001F4AC", "endpoint": "admin_comments"},
@@ -106,8 +107,8 @@ IMAGE_SIGNATURES = {
 CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
-def upload_car_image(file):
-    """Upload an image to Supabase Storage and return its public URL."""
+def upload_car_image(file, folder="cars"):
+    """Upload an image to Supabase Storage (inside `folder`) and return its public URL."""
     if not file or not file.filename:
         raise ValueError("Please select an image.")
 
@@ -127,7 +128,7 @@ def upload_car_image(file):
     if not data.startswith(IMAGE_SIGNATURES[ext]):
         raise ValueError(f"{file.filename} is not a valid {ext.upper()} image.")
 
-    path = f"cars/{uuid.uuid4().hex}.{ext}"
+    path = f"{folder}/{uuid.uuid4().hex}.{ext}"
     supabase.storage.from_(STORAGE_BUCKET).upload(
         path, data, {"content-type": CONTENT_TYPES[ext], "upsert": "false"}
     )
@@ -508,7 +509,7 @@ def admin_cars_delete(item_id):
 # REVIEWS, BLOGS, COMMENTS, FAQS, MESSAGES, SUBSCRIBERS
 # =========================================================
 
-register_extra_routes(app, supabase, admin_required, valid_csrf, upload_image)
+register_extra_routes(app, supabase, admin_required, valid_csrf, upload_image, delete_images)
 
 
 # =========================================================

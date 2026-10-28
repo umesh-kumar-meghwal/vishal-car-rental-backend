@@ -14,6 +14,7 @@ from flask import (
     request, jsonify, redirect, url_for, flash, render_template_string
 )
 
+
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^[0-9+ ()-]{8,18}$")
 _hits = defaultdict(deque)

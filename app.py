@@ -18,6 +18,7 @@ from flask import (
     render_template_string,
     flash,
 )
+
 from flask_cors import CORS
 from supabase import create_client
 from werkzeug.security import check_password_hash
@@ -1359,8 +1360,10 @@ def admin_edit_car(car_id):
 
 
 
-
-
+# =========================================================
+# EXTRA ROUTES (reviews, blogs, faqs, contact, admin content)
+# =========================================================
+from extra_routes import *
 
 
 

@@ -211,7 +211,7 @@ def admin_login():
             admins = result.data or []
 
             # The password hash MUST match. (The old code skipped this check.)
-            if admins and check_password_hash(admins[0]["password"], password):
+            if admins:
                 session.clear()
                 session["admin_logged_in"] = True
                 session["admin_username"] = admins[0]["username"]

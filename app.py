@@ -273,7 +273,7 @@ def admin_dashboard():
 # CARS: LIST / ADD / EDIT / TOGGLE / DELETE (separate pages)
 # =========================================================
 
-FUELS = [(x, x) for x in ["Petrol", "Diesel", "CNG", "Electric", "Hybrid"]]
+FUELS = [(x, x) for x in ["Petrol", "Diesel","Petrol+Diesel" ,"CNG", "Electric", "Hybrid"]]
 TRANSMISSIONS = [(x, x) for x in ["Manual", "Automatic", "AMT", "CVT", "DCT"]]
 
 CAR_SECTIONS = [

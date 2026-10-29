@@ -202,28 +202,298 @@ LOGIN = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in - Vishal Car Rental Kota  Admin</title>
+<title>Sign in - Vishal Car Rental Kota Admin</title>
 {% include "styles.html" %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --primary: #4f46e5;
+    --primary-glow: rgba(79, 70, 229, 0.4);
+    --accent: #06b6d4;
+    --bg-dark: #0f172a;
+    --card-bg: rgba(30, 41, 59, 0.7);
+    --border-color: rgba(255, 255, 255, 0.12);
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  body {
+    background-color: var(--bg-dark);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    position: relative;
+    color: var(--text-main);
+  }
+
+  /* Animated Glowing Background Blobs */
+  .bg-animation {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    z-index: 0;
+  }
+
+  .blob {
+    position: absolute;
+    filter: blur(90px);
+    border-radius: 50%;
+    opacity: 0.6;
+    animation: float 18s infinite ease-in-out alternate;
+  }
+
+  .blob-1 {
+    width: 380px;
+    height: 380px;
+    background: #4f46e5;
+    top: -80px;
+    left: -80px;
+  }
+
+  .blob-2 {
+    width: 420px;
+    height: 420px;
+    background: #06b6d4;
+    bottom: -100px;
+    right: -100px;
+    animation-delay: -5s;
+  }
+
+  .blob-3 {
+    width: 300px;
+    height: 300px;
+    background: #ec4899;
+    top: 40%;
+    left: 60%;
+    animation-delay: -10s;
+  }
+
+  @keyframes float {
+    0% { transform: translate(0, 0) scale(1) rotate(0deg); }
+    50% { transform: translate(60px, 80px) scale(1.15) rotate(180deg); }
+    100% { transform: translate(-40px, 40px) scale(0.9) rotate(360deg); }
+  }
+
+  /* Main Container */
+  .login-wrap {
+    position: relative;
+    z-index: 10;
+    width: 100%;
+    max-width: 430px;
+    padding: 20px;
+  }
+
+  /* Glassmorphism Card */
+  .login-card {
+    background: var(--card-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border-color);
+    border-radius: 24px;
+    padding: 40px 36px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
+                0 0 30px rgba(79, 70, 229, 0.15);
+    transform: translateY(20px);
+    opacity: 0;
+    animation: cardAppear 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes cardAppear {
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Modern Logo Styling */
+  .logo-box {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 68px;
+    height: 68px;
+    background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+    color: #ffffff;
+    font-size: 32px;
+    font-weight: 800;
+    border-radius: 20px;
+    box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.5);
+    animation: logoPulse 3s infinite ease-in-out;
+  }
+
+  @keyframes logoPulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.5); }
+    50% { transform: scale(1.05); box-shadow: 0 15px 35px -5px rgba(168, 85, 247, 0.7); }
+  }
+
+  /* Header Typography */
+  h1 {
+    font-size: 26px;
+    font-weight: 700;
+    text-align: center;
+    color: var(--text-main);
+    letter-spacing: -0.5px;
+    margin-bottom: 6px;
+  }
+
+  p.muted {
+    font-size: 14px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 28px;
+    line-height: 1.5;
+  }
+
+  /* Form Controls */
+  .form-group {
+    margin-bottom: 20px;
+    position: relative;
+  }
+
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #cbd5e1;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  input[type="text"],
+  input[type="password"] {
+    width: 100%;
+    padding: 14px 18px;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    color: #fff;
+    font-size: 15px;
+    outline: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  input[type="text"]:focus,
+  input[type="password"]:focus {
+    border-color: #6366f1;
+    background: rgba(15, 23, 42, 0.85);
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.25);
+    transform: translateY(-2px);
+  }
+
+  /* Animated Submit Button */
+  button[type="submit"] {
+    width: 100%;
+    padding: 16px;
+    margin-top: 10px;
+    background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+    border: none;
+    border-radius: 12px;
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 10px 20px -5px rgba(79, 70, 229, 0.4);
+    position: relative;
+    overflow: hidden;
+  }
+
+  button[type="submit"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 15px 30px -5px rgba(6, 182, 212, 0.5);
+    background: linear-gradient(135deg, #4338ca 0%, #0891b2 100%);
+  }
+
+  button[type="submit"]:active {
+    transform: translateY(1px);
+  }
+
+  /* Flash / Error Toast Styling */
+  .toast.err {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 14px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    animation: shake 0.4s ease-in-out;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-6px); }
+    40%, 80% { transform: translateX(6px); }
+  }
+</style>
 </head>
 <body>
+
+<!-- Animated Background Canvas -->
+<div class="bg-animation">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+</div>
+
 <div class="login-wrap">
   <div class="login-card">
-    <span class="logo">K</span>
-    <h1>Welcome back</h1>
-    <p class="muted">Sign in to manage cars, content and enquiries.</p>
+    <div class="logo-box">
+      <span class="logo">V</span>
+    </div>
+    
+    <h1>Welcome, Vishal!</h1>
+    <p class="muted">Sign in to manage cars, content, and enquiries.</p>
+
     {% with msgs = get_flashed_messages(with_categories=true) %}
-      {% for cat, m in msgs %}<div class="toast err" role="alert" style="margin-top:14px">{{ m }}</div>{% endfor %}
+      {% for cat, m in msgs %}
+        <div class="toast err" role="alert">
+          <span>⚠️</span> {{ m }}
+        </div>
+      {% endfor %}
     {% endwith %}
+
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label for="username">Username</label>
-      <input id="username" type="text" name="username" required autocomplete="username" autofocus>
-      <label for="password">Password</label>
-      <input id="password" type="password" name="password" required autocomplete="current-password">
-      <button type="submit">Sign in</button>
+      
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input id="username" type="text" name="username" placeholder="Enter username" required autocomplete="username" autofocus>
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+      </div>
+
+      <button type="submit">Sign In</button>
     </form>
   </div>
 </div>
+
 </body>
 </html>
 """

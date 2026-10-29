@@ -164,11 +164,7 @@ def delete_images(urls):
 
 @app.route("/")
 def home():
-    return jsonify({
-        "message": "Car Rental API is running",
-        "cars_endpoint": "/api/cars",
-        "admin_login": "/admin/login",
-    })
+    return redirect('/admin/login')
 
 
 @app.route("/api/cars", methods=["GET"])

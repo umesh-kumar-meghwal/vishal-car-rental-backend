@@ -206,12 +206,12 @@ def admin_login():
         password = request.form.get("password", "")
 
         try:
-            result = (supabase.table("admin").select("username, password_hash")
+            result = (supabase.table("admin").select("username, password")
                       .eq("username", username).limit(1).execute())
             admins = result.data or []
 
             # The password hash MUST match. (The old code skipped this check.)
-            if admins and check_password_hash(admins[0]["password_hash"], password):
+            if admins and check_password_hash(admins[0]["password"], password):
                 session.clear()
                 session["admin_logged_in"] = True
                 session["admin_username"] = admins[0]["username"]
